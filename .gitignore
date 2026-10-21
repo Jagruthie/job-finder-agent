@@ -1,0 +1,12 @@
+# Personal files: never commit these
+resumes/
+profiles/*.json
+!profiles/example.json
+settings.json
+companies.csv
+state.json
+output/
+
+__pycache__/
+*.pyc
+.venv/

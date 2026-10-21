@@ -1,0 +1,6 @@
+{
+  "_note": "Fake example. Generate your own with: python -m jobfinder profile your_resume.docx --name yourname",
+  "name": "example",
+  "skills": ["Product Management", "Agile", "User Research", "SQL", "Metrics"],
+  "titles": ["Associate Product Manager", "Product Analyst"]
+}

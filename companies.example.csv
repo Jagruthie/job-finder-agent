@@ -1,0 +1,7 @@
+# Copy to companies.csv and add the companies you want to watch.
+# platform: greenhouse, lever or ashby
+# board: the name in the company's careers URL, for example
+#   boards.greenhouse.io/<board>   jobs.lever.co/<board>   jobs.ashbyhq.com/<board>
+# email and x_handle are optional. Only add contacts the company already makes public.
+name,platform,board,email,x_handle
+# Example Co,greenhouse,exampleco,careers@example.com,@examplefounder

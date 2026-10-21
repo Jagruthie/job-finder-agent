@@ -1,0 +1,108 @@
+{
+  "_about": "Starter vocabulary. 'skills' maps a skill name to the words that mean it. 'titles' maps a role title to its other spellings and the skills that suggest it. Anyone can extend this file.",
+  "skills": {
+    "Product Management": ["product management", "product manager", "product ownership", "product owner", "product builder", "pm equivalent", "product roadmap"],
+    "Product Strategy": ["product strategy"],
+    "Roadmapping": ["roadmap", "roadmaps", "roadmapping"],
+    "User Research": ["user research", "user interviews", "customer discovery", "user testing", "usability"],
+    "Product Specs": ["prd", "product requirements", "spec first", "product specs", "specification", "specs"],
+    "Agile": ["agile", "scrum", "sprint", "sprints", "kanban"],
+    "Jira": ["jira"],
+    "Prioritization": ["prioritization", "prioritisation", "prioritizing", "prioritising"],
+    "A/B Testing": ["a/b test", "a/b testing", "experimentation"],
+    "Product Analytics": ["product analytics", "mixpanel", "amplitude", "funnel analysis", "funnels"],
+    "Metrics": ["metrics", "kpi", "kpis", "okr", "okrs"],
+    "Stakeholder Management": ["stakeholder", "stakeholders"],
+    "Cross-functional Leadership": ["cross functional", "cross-functional"],
+    "Zero-to-One": ["zero to one", "zero-to-one", "0 to 1", "from scratch", "ambiguity", "ambiguous"],
+    "Go-to-Market": ["go to market", "go-to-market", "gtm"],
+    "Competitive Analysis": ["competitive analysis", "competitor analysis", "teardown", "teardowns", "market research"],
+    "Wireframing": ["wireframe", "wireframes", "wireframing", "prototyping", "prototype"],
+    "Figma": ["figma"],
+    "AI Products": ["llm", "llms", "rag", "prompt design", "prompt engineering", "generative ai", "genai", "ai product", "ai products"],
+    "AI Tools": ["chatgpt", "claude", "copilot", "github copilot", "claude code"],
+    "Notion": ["notion"],
+    "Miro": ["miro"],
+    "SEO": ["seo", "search engine optimization", "search engine optimisation"],
+    "GEO": ["generative engine optimization", "generative engine optimisation", "aeo", "answer engine optimization", "ai overviews"],
+    "Keyword Research": ["keyword research", "keyword", "keywords", "topic research"],
+    "Content Strategy": ["content strategy", "content planning", "editorial calendar", "content marketing"],
+    "Content Writing": ["content writing", "blog posts", "blogging", "article writing", "copywriting", "copywriter"],
+    "Writing": ["writing", "writer", "editing"],
+    "Link Building": ["link building", "backlinks", "backlink"],
+    "Google Search Console": ["google search console", "search console", "gsc"],
+    "Ahrefs": ["ahrefs"],
+    "Semrush": ["semrush"],
+    "CMS": ["cms", "wordpress", "sanity", "webflow", "contentful"],
+    "Social Media": ["social media", "instagram", "linkedin"],
+    "Audience Research": ["audience research", "reddit", "community research", "social listening"],
+    "Cold Outreach": ["cold outreach", "cold email", "cold emails", "outreach", "lead generation", "lead sourcing"],
+    "Operations": ["operations", "business operations", "ops"],
+    "Strategy": ["strategy", "strategic planning"],
+    "Project Management": ["project management", "project coordination", "program management"],
+    "Data Analysis": ["data analysis", "data analytics", "analytics", "dashboards"],
+    "SQL": ["sql", "mysql", "postgresql", "postgres"],
+    "Python": ["python"],
+    "Excel/Sheets": ["excel", "google sheets", "spreadsheets", "spreadsheet"],
+    "Presentation": ["presentation", "presentations", "powerpoint", "slide decks", "decks"],
+    "Communication": ["communication", "communications"],
+    "Research": ["research", "researching"],
+    "Financial Modeling": ["financial modeling", "financial modelling", "budgeting", "forecasting"],
+    "Documentation": ["documentation", "technical writing", "documenting"],
+    "Recruiting": ["recruiting", "recruitment", "hiring", "onboarding"],
+    "JavaScript": ["javascript", "typescript", "node js", "nodejs"],
+    "React/Next.js": ["react", "next js", "nextjs"],
+    "Git/GitHub": ["github", "git"],
+    "APIs": ["api", "apis"]
+  },
+  "titles": {
+    "Associate Product Manager": {
+      "aliases": ["apm", "associate pm", "junior product manager", "product management intern"],
+      "skills": ["Product Management", "Product Strategy", "Roadmapping", "User Research", "Product Specs", "Agile", "Prioritization", "Metrics", "Zero-to-One", "Product Analytics"]
+    },
+    "Product Analyst": {
+      "aliases": ["product data analyst"],
+      "skills": ["Product Analytics", "Data Analysis", "SQL", "Metrics", "A/B Testing", "Excel/Sheets"]
+    },
+    "Product Operations": {
+      "aliases": ["product ops"],
+      "skills": ["Product Management", "Operations", "Agile", "Jira", "Documentation"]
+    },
+    "Founder's Office": {
+      "aliases": ["founders office", "founder office", "founders associate", "associate founders office", "founders office associate", "founders office intern"],
+      "skills": ["Zero-to-One", "Strategy", "Operations", "Project Management", "Stakeholder Management", "Research", "Cross-functional Leadership", "Presentation", "Data Analysis", "Communication"]
+    },
+    "Chief of Staff": {
+      "aliases": ["associate chief of staff"],
+      "skills": ["Strategy", "Operations", "Stakeholder Management", "Project Management", "Communication", "Presentation"]
+    },
+    "Strategy and Operations Associate": {
+      "aliases": ["strategy operations associate", "strategy and operations", "business operations associate", "business operations", "operations associate", "strategy associate"],
+      "skills": ["Strategy", "Operations", "Data Analysis", "Excel/Sheets", "Project Management"]
+    },
+    "Business Analyst": {
+      "aliases": ["associate business analyst"],
+      "skills": ["Data Analysis", "SQL", "Excel/Sheets", "Documentation", "Stakeholder Management"]
+    },
+    "SEO Executive": {
+      "aliases": ["seo specialist", "seo associate", "seo analyst", "seo intern", "seo content"],
+      "skills": ["SEO", "Keyword Research", "Content Strategy", "Google Search Console", "Ahrefs", "Semrush", "Link Building", "GEO"]
+    },
+    "GEO Specialist": {
+      "aliases": ["aeo specialist", "geo specialist", "generative engine optimization"],
+      "skills": ["GEO", "SEO", "Content Strategy"]
+    },
+    "Content Strategist": {
+      "aliases": ["content marketing associate", "content marketing executive"],
+      "skills": ["Content Strategy", "Content Writing", "SEO", "Audience Research", "Writing", "Social Media"]
+    },
+    "Content Writer": {
+      "aliases": ["copywriter", "content associate", "content executive", "content marketer"],
+      "skills": ["Content Writing", "Writing", "SEO", "Social Media"]
+    },
+    "Growth Associate": {
+      "aliases": ["growth executive", "growth marketing associate", "growth intern"],
+      "skills": ["Cold Outreach", "Social Media", "Metrics", "Content Strategy", "Go-to-Market"]
+    }
+  }
+}

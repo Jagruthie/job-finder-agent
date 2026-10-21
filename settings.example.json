@@ -1,0 +1,13 @@
+{
+  "_note": "Edit by hand or run: python -m jobfinder setup. Shift time is not a setting: a '10-6' mention only raises a job's rank.",
+  "freshness_days": 7,
+  "max_experience_years": 1,
+  "preferred_locations": ["Hyderabad", "Remote"],
+  "location_mode": "prefer",
+  "pay_currency": "INR",
+  "min_annual_pay": null,
+  "max_annual_pay": null,
+  "pay_mode": "prefer",
+  "exclude_title_words": ["senior", "sr", "lead", "head", "director", "vp", "principal", "staff"],
+  "request_delay_seconds": 1.5
+}
