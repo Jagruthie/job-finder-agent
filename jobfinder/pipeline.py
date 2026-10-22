@@ -11,7 +11,7 @@ from .filters import (NOT_STATED, TOO_SENIOR, WITHIN, experience_bucket, has_exc
                       location_matches, parse_annual_pay, pay_from_text, shift_mentioned, title_matches)
 from .models import Job
 from .sources import SourceError
-from .textutil import parse_dt
+from .textutil import norm, parse_dt
 from .vocab import Vocab
 
 DEFAULT_SETTINGS = {
@@ -50,6 +50,31 @@ def clean_locations(values) -> List[str]:
     return cleaned
 
 
+# Words people type at a prompt when they mean "leave it as it is". Never a real role or skill.
+NON_ANSWERS = {"keep", "enter", "yes", "y", "no", "n", "none", "ok", "okay", "same", "skip"}
+
+
+def is_non_answer(value: str) -> bool:
+    return norm(value) in NON_ANSWERS or not norm(value)
+
+
+def clean_list(values) -> List[str]:
+    """Clean a saved role or skill list: strip stray keystrokes, drop empties and non-answers."""
+    return [text for text in (clean_text(v) for v in values or []) if not is_non_answer(text)]
+
+
+def profile_files(directory: str) -> List[Path]:
+    """The profiles to use in a folder: every .json except example.json and *.backup.json copies."""
+    folder = Path(directory)
+    if not folder.exists():
+        return []
+    return sorted(f for f in folder.glob("*.json") if f.stem != "example" and not is_backup(f))
+
+
+def is_backup(path) -> bool:
+    return Path(path).name.lower().endswith(".backup.json")
+
+
 class ProfileError(Exception):
     """A profile cannot be used as it is."""
 
@@ -70,9 +95,9 @@ def save_state(path: str, state: dict) -> None:
 
 def prepare_profile(profile: dict, vocab: Vocab) -> dict:
     phrases: List[str] = []
-    for title in profile.get("titles", []):
+    for title in clean_list(profile.get("titles", [])):
         phrases.extend(vocab.title_phrases(title))
-    return {**profile, "_phrases": sorted(set(phrases)), "_skills": set(profile.get("skills", []))}
+    return {**profile, "_phrases": sorted(set(phrases)), "_skills": set(clean_list(profile.get("skills", [])))}
 
 
 def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vocab: Vocab,
@@ -84,7 +109,8 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
     for profile in prepared:
         if not profile["_phrases"]:
             raise ProfileError(
-                f"Profile '{profile.get('name', '?')}' has no roles, so it would match every job title. "
+                f"Stopped: profile '{profile.get('name', '?')}' has no usable roles, so no jobs were screened. "
+                "(Empty lists and words such as 'keep' do not count as roles.) "
                 "Run 'python -m jobfinder setup' to set its roles, or add them to the 'titles' list in its file.")
     first_seen: Dict[str, str] = state.setdefault("first_seen", {})
     dropped: Dict[str, str] = state.setdefault("dropped", {})

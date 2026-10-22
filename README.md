@@ -8,8 +8,8 @@ It reads only public job lists that Greenhouse, Lever and Ashby publish for comp
 
 ## What it does
 
-1. Reads your resume on your own computer and lists the skills it finds.
-2. **You edit that list.** Suggested role titles are included. This is the confirm step.
+1. Asks for your resume and reads it on your own computer. It lists the skills it finds.
+2. **You confirm or edit those skills.** Then it lists the roles that need those skills, with the reasons, and you confirm the roles. This is the confirm step.
 3. Fetches open jobs for the companies in your `companies.csv`.
 4. Removes jobs older than 7 days and remembers them, so they never return as new.
 5. Keeps only the roles you want, asking for 0 to 1 years of experience (jobs that do not state it go in a review bucket).
@@ -29,13 +29,13 @@ This runs your real profiles against 12 invented jobs built to trigger each rule
 ```bash
 pip install -r requirements.txt
 
-# 1. Make a profile from each resume, then open the file and edit it
-python -m jobfinder profile "path/to/resume.docx" --name pm
-python -m jobfinder profile "path/to/other_resume.docx" --name seo
+# 1. Answer a few questions and give your resume (drag the file into the terminal).
+#    You confirm the skills it finds, then the roles that need them.
+#    One profile per resume, for example "pm" and "seo".
+python -m jobfinder setup
 
-# 2. Copy the example files and edit them
-cp settings.example.json settings.json
-cp companies.example.csv companies.csv      # then add the companies you want to watch
+# 2. Copy the companies file and add the companies you want to watch
+cp companies.example.csv companies.csv
 
 # 3. Run it (daily is a good rhythm)
 python -m jobfinder run --profiles profiles/pm.json profiles/seo.json
@@ -59,17 +59,19 @@ To add a company, open its careers page and look at the link. `boards.greenhouse
 
 ## Change your preferences
 
-Run `python -m jobfinder setup`. It asks a few questions in the terminal and saves your answers. Press Enter to keep the value in brackets.
+Run `python -m jobfinder setup`. It asks a few questions in the terminal and saves your answers. Press Enter to keep the value in brackets. Typing `keep` or `yes` is not saved as a role or skill; press Enter instead.
 
 | Question | Setting | Where it is saved |
 | --- | --- | --- |
-| Roles to look for | `titles` | each profile file in `profiles/` |
+| Your resume (optional on later runs). Read locally; the file is not copied and its path is not saved | `skills` | a profile file in `profiles/` |
+| Skills: the ones found in your resume, which you confirm or edit | `skills` | each profile file in `profiles/` |
+| Roles: the ones that need 2 or more of your skills, which you confirm or edit | `titles` | each profile file in `profiles/` |
 | Cities | `preferred_locations`, `location_mode` | `settings.json` |
-| Most years of experience a job may ask for | `max_experience_years` | `settings.json` |
+| Most years of experience a job may ask for (`1`, or a range such as `0-1`) | `max_experience_years` | `settings.json` |
 | Posted within how many days | `freshness_days` | `settings.json` |
 | Pay you want, typed your own way, such as `8 LPA`, `more than 8 lakhs`, `6-12 LPA`, `up to 10 LPA` or `$80k` | `min_annual_pay`, `max_annual_pay`, `pay_currency`, `pay_mode` | `settings.json` |
 
-You can also edit these files by hand. Other settings: `exclude_title_words`, `request_delay_seconds`. Skills are edited in the profile file.
+You can also edit these files by hand. Other settings: `exclude_title_words`, `request_delay_seconds`. Backup copies named `*.backup.json` in `profiles/` are ignored.
 
 **How pay works.** `setup` repeats back what it understood. In `prefer` mode, jobs whose stated pay is outside your range stay on the list but rank lower. In `require` mode they are removed. Jobs that do not state pay are always kept, because most postings do not. Pay is only compared when the posting uses your currency, and it is never converted. Monthly pay is multiplied by 12. Hourly pay, and bare numbers with no sign of a period, are treated as not comparable, because guessing would wrongly remove good jobs.
 

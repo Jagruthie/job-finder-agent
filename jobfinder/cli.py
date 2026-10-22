@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import List
 
 from .demo import demo_data
-from .pipeline import (DEFAULT_SETTINGS, ProfileError, clean_locations, load_state, read_companies, run_pipeline,
-                       save_state, write_csv)
+from .pipeline import (DEFAULT_SETTINGS, ProfileError, clean_list, clean_locations, is_backup, load_state,
+                       read_companies, run_pipeline, save_state, write_csv)
 from .resume import read_resume_text
 from .setup import run_setup
 from .sources import fetch_board
@@ -32,6 +32,9 @@ def load_settings(path: str) -> dict:
 def load_profiles(paths: List[str]) -> List[dict]:
     profiles = []
     for path in paths:
+        if is_backup(path):
+            print(f"(skipping {path}: it is a backup copy, not a profile)")
+            continue
         profile = json.loads(Path(path).read_text(encoding="utf-8"))
         profile.setdefault("name", Path(path).stem)
         profiles.append(profile)
@@ -40,7 +43,7 @@ def load_profiles(paths: List[str]) -> List[dict]:
 
 def print_profiles(profiles: List[dict]) -> None:
     for profile in profiles:
-        titles = profile.get("titles", [])
+        titles = clean_list(profile.get("titles", []))
         print(f"Profile '{profile.get('name', '?')}': {len(profile.get('skills', []))} skills, "
               f"looking for roles: {', '.join(titles) if titles else '(none)'}")
 
@@ -93,8 +96,9 @@ def cmd_profile(args) -> int:
     }, indent=2), encoding="utf-8")
     print(f"Found {len(skills)} skills and suggested {len(titles)} titles.")
     print(f"Skills: {', '.join(skills) or '(none)'}")
-    print(f"Suggested titles: {', '.join(titles) or '(none)'}")
-    print(f"\nNow open {target} and edit it. This is the confirm step.")
+    print(f"Suggested roles (from those skills): {', '.join(titles) or '(none)'}")
+    print("\nNow run: python -m jobfinder setup")
+    print("It shows these skills for you to confirm, then the roles that need those skills. This is the confirm step.")
     return 0
 
 
@@ -112,6 +116,7 @@ def cmd_demo(args) -> int:
                                              lambda platform, board, name: jobs[board], now=now)
     except ProfileError as error:
         print(f"\n{error}")
+        print("Kept: 0 (the demo stopped before screening any jobs)")
         return 1
     out_path = Path(args.out_dir) / f"demo-{now.date().isoformat()}.csv"
     write_csv(rows, str(out_path))

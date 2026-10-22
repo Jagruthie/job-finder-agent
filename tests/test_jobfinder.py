@@ -12,7 +12,9 @@ import json
 from jobfinder import filters
 from jobfinder.setup import run_setup
 from jobfinder.models import Job
-from jobfinder.pipeline import ProfileError, read_companies, run_pipeline, write_csv, COLUMNS
+from jobfinder.cli import load_profiles
+from jobfinder.pipeline import (ProfileError, clean_list, profile_files, read_companies, run_pipeline, write_csv,
+                                COLUMNS)
 from jobfinder.sources import SourceError, fetch_board
 from jobfinder.textutil import norm, parse_dt, strip_html
 from jobfinder.vocab import Vocab
@@ -158,6 +160,20 @@ class VocabTests(unittest.TestCase):
         self.assertNotIn("Git/GitHub", skills)
         titles = VOCAB.suggest_titles(skills)
         self.assertIn("SEO Executive", titles)
+
+    def test_longer_skill_phrase_is_not_counted_twice(self):
+        skills = VOCAB.extract_skills("Keyword research and content strategy for our blog.")
+        self.assertIn("Keyword Research", skills)
+        self.assertIn("Content Strategy", skills)
+        self.assertNotIn("Research", skills)        # only inside 'keyword research'
+        self.assertNotIn("Strategy", skills)        # only inside 'content strategy'
+        # Said on its own as well, it still counts.
+        both = VOCAB.extract_skills("Keyword research. We value research and strategy.")
+        self.assertIn("Research", both)
+        self.assertIn("Strategy", both)
+        # So two buried words no longer suggest an unrelated role.
+        self.assertNotIn("Founder's Office", VOCAB.suggest_titles(VOCAB.extract_skills(
+            "SEO, keyword research, Ahrefs, Semrush, content strategy, GEO, blog writing.")))
 
     def test_git_does_not_match_github_or_digit(self):
         self.assertEqual(VOCAB.extract_skills("digital gift"), [])
@@ -340,6 +356,8 @@ class SetupTests(unittest.TestCase):
                 "5",                            # 4 freshness
                 "more than 8 lakhs per annum",  # 5 pay, said the way a person says it
                 "remove",                       # 6 outside the range
+                "",                             # resume: Enter skips (profile already exists)
+                "",                             # skills for pm: Enter keeps them
                 "Associate Product Manager, Growth Rocketeer",   # roles for pm
             ]
             said = []
@@ -385,7 +403,7 @@ class SetupTests(unittest.TestCase):
             with open(os.path.join(profiles, "seo.json"), "w") as handle:
                 json.dump({"name": "seo", "skills": ["SEO", "Keyword Research", "Ahrefs"], "titles": []}, handle)
             run_setup(os.path.join(tmp, "settings.json"), profiles, VOCAB, say=lambda s: None,
-                      ask=self.scripted(["", "", "", "", "none", ""]))   # Enter at the roles question
+                      ask=self.scripted(["", "", "", "", "none", "", "", ""]))   # Enter at skills, then Enter at roles
             with open(os.path.join(profiles, "seo.json")) as handle:
                 self.assertIn("SEO Executive", json.load(handle)["titles"])
 
@@ -397,7 +415,7 @@ class SetupTests(unittest.TestCase):
                 json.dump({"name": "x", "skills": [], "titles": []}, handle)
             said = []
             run_setup(os.path.join(tmp, "settings.json"), profiles, VOCAB, say=said.append,
-                      ask=self.scripted(["", "", "", "", "none", "", "SEO Executive"]))
+                      ask=self.scripted(["", "", "", "", "none", "", "", "", "SEO Executive"]))
             with open(os.path.join(profiles, "x.json")) as handle:
                 self.assertEqual(json.load(handle)["titles"], ["SEO Executive"])
             self.assertTrue(any("at least one role" in line for line in said))
@@ -409,7 +427,7 @@ class SetupTests(unittest.TestCase):
             with open(os.path.join(profiles, "seo.json"), "w") as handle:
                 json.dump({"name": "seo", "skills": [], "titles": ["SEO Executive"]}, handle)
             run_setup(os.path.join(tmp, "settings.json"), profiles, VOCAB, say=lambda s: None,
-                      ask=self.scripted(["", "", "", "", "none", " , ,"]))
+                      ask=self.scripted(["", "", "", "", "none", "", "", " , ,"]))
             with open(os.path.join(profiles, "seo.json")) as handle:
                 self.assertEqual(json.load(handle)["titles"], ["SEO Executive"])
 
@@ -417,12 +435,12 @@ class SetupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "settings.json")
             run_setup(path, os.path.join(tmp, "nope"), VOCAB, say=lambda s: None,
-                      ask=self.scripted(["", "", "", "", "6-12 LPA", "keep"]))
+                      ask=self.scripted(["", "", "", "", "6-12 LPA", "keep", ""]))
             with open(path) as handle:
                 saved = json.load(handle)
             self.assertEqual((saved["min_annual_pay"], saved["max_annual_pay"]), (600000, 1200000))
             run_setup(path, os.path.join(tmp, "nope"), VOCAB, say=lambda s: None,
-                      ask=self.scripted(["", "", "", "", "$80k", ""]))
+                      ask=self.scripted(["", "", "", "", "$80k", "", ""]))
             with open(path) as handle:
                 saved = json.load(handle)
             self.assertEqual((saved["pay_currency"], saved["min_annual_pay"]), ("USD", 80000))
@@ -433,7 +451,7 @@ class SetupTests(unittest.TestCase):
             with open(path, "w") as handle:
                 json.dump({"min_annual_pay": 500000, "pay_mode": "require"}, handle)
             run_setup(path, os.path.join(tmp, "nope"), VOCAB, say=lambda s: None,
-                      ask=self.scripted(["", "", "", "", "none"]))
+                      ask=self.scripted(["", "", "", "", "none", ""]))
             with open(path) as handle:
                 saved = json.load(handle)
             self.assertIsNone(saved["min_annual_pay"])
@@ -444,7 +462,7 @@ class SetupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "settings.json")
             said = []
-            answers = ["", "banglore", "keep", "abc", "-1", "3", "", "banana", "8 LPA", "keep"]
+            answers = ["", "banglore", "keep", "abc", "-1", "3", "", "banana", "8 LPA", "keep", ""]
             run_setup(path, os.path.join(tmp, "nope"), VOCAB, say=said.append, ask=self.scripted(answers))
             with open(path) as handle:
                 saved = json.load(handle)
@@ -501,6 +519,176 @@ class PayPreferenceTests(unittest.TestCase):
         self.assertEqual(checks["SEO Specialist"], "Within your range")        # 300,000 to 500,000 overlaps
         self.assertEqual(checks["Business Operations Associate"], "Above your range")   # 6L to 9L
         self.assertEqual(checks["Associate Product Manager"], "Below your range")       # 300,000
+
+
+class ManualTestingBugTests(unittest.TestCase):
+    """Bugs found by hand on 2026-10-22: backup files read as profiles, 'keep' saved as a role,
+    and a profile with no usable roles letting a run go ahead."""
+
+    def scripted(self, answers):
+        queue = list(answers)
+        return lambda prompt: queue.pop(0)
+
+    def make_profiles(self, tmp, files):
+        folder = os.path.join(tmp, "profiles")
+        os.makedirs(folder)
+        for name, data in files.items():
+            with open(os.path.join(folder, name), "w") as handle:
+                json.dump(data, handle)
+        return folder
+
+    # a) backup copies
+    def test_setup_ignores_backup_copies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            seo = {"name": "seo", "skills": ["SEO"], "titles": ["SEO Executive"]}
+            folder = self.make_profiles(tmp, {"seo.json": seo, "seo.backup.json": seo, "example.json": seo})
+            asked = []
+            def ask(prompt):
+                asked.append(prompt)
+                return ""
+            run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, ask=ask, say=lambda s: None)
+            self.assertEqual(sum("Roles [" in p for p in asked), 1)        # seo asked once, not twice
+            self.assertEqual([p.name for p in profile_files(folder)], ["seo.json"])
+
+    def test_run_skips_backup_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            seo = {"name": "seo", "skills": ["SEO"], "titles": ["SEO Executive"]}
+            folder = self.make_profiles(tmp, {"seo.json": seo, "seo.backup.json": seo})
+            loaded = load_profiles([os.path.join(folder, "seo.json"), os.path.join(folder, "seo.backup.json")])
+            self.assertEqual(len(loaded), 1)
+
+    # b) non-answers
+    def test_keep_is_refused_as_a_role_and_enter_keeps_old_roles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = self.make_profiles(tmp, {"pm.json": {"name": "pm", "skills": ["SQL"],
+                                                          "titles": ["Product Analyst"]}})
+            said = []
+            run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=said.append,
+                      ask=self.scripted(["", "", "", "", "none", "", "", "keep", "yes", ""]))
+            with open(os.path.join(folder, "pm.json")) as handle:
+                self.assertEqual(json.load(handle)["titles"], ["Product Analyst"])
+            self.assertTrue(any("'keep' is not a role name" in line and "press Enter" in line for line in said))
+
+    def test_keep_mixed_with_real_roles_is_refused_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = self.make_profiles(tmp, {"seo.json": {"name": "seo", "skills": [], "titles": ["SEO Executive"]}})
+            run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=lambda s: None,
+                      ask=self.scripted(["", "", "", "", "none", "", "", "Content Writer, none", "Content Writer"]))
+            with open(os.path.join(folder, "seo.json")) as handle:
+                self.assertEqual(json.load(handle)["titles"], ["Content Writer"])
+
+    def test_keep_is_refused_as_a_skill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = self.make_profiles(tmp, {"seo.json": {"name": "seo", "skills": ["SEO"], "titles": ["SEO Executive"]}})
+            run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=lambda s: None,
+                      ask=self.scripted(["", "", "", "", "none", "", "keep", "SEO, Ahrefs", ""]))
+            with open(os.path.join(folder, "seo.json")) as handle:
+                self.assertEqual(json.load(handle)["skills"], ["SEO", "Ahrefs"])
+
+    def test_saved_keep_and_escape_roles_are_cleaned_on_load(self):
+        self.assertEqual(clean_list(["keep", "\x1b", " ", "SEO Executive"]), ["SEO Executive"])
+
+    # c) no usable roles stops the run before anything is fetched
+    def test_profile_whose_only_role_is_keep_stops_the_run(self):
+        fetched = []
+        def fetch(platform, board, name):
+            fetched.append(board)
+            return []
+        bad = {"name": "seo", "skills": ["SEO"], "titles": ["keep"]}
+        with self.assertRaises(ProfileError) as caught:
+            run_pipeline(COMPANIES, [PM, bad], {}, VOCAB, {"first_seen": {}, "dropped": {}}, fetch, now=NOW)
+        self.assertIn("Stopped", str(caught.exception))
+        self.assertEqual(fetched, [])
+
+    # e) the demo always prints a kept count
+    def test_demo_prints_kept_count_even_when_stopped(self):
+        import contextlib
+        import io
+        from jobfinder.cli import main
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = self.make_profiles(tmp, {"seo.json": {"name": "seo", "skills": ["SEO"], "titles": []}})
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = main(["demo", "--profiles", os.path.join(folder, "seo.json"),
+                             "--settings", os.path.join(tmp, "none.json"), "--out-dir", os.path.join(tmp, "out")])
+            self.assertEqual(code, 1)
+            self.assertIn("Kept: 0", out.getvalue())
+
+
+class RolesFromSkillsTests(unittest.TestCase):
+    """The process: skills from the resume, confirmed by the user, then the roles that need those skills."""
+
+    def test_roles_come_from_confirmed_skills_with_reasons(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = os.path.join(tmp, "profiles")
+            os.makedirs(folder)
+            with open(os.path.join(folder, "seo.json"), "w") as handle:
+                json.dump({"name": "seo", "skills": ["SQL"], "titles": ["seo strategist"]}, handle)
+            said = []
+            queue = ["", "", "", "", "none",
+                     "",                                         # resume: Enter skips
+                     "SEO, Keyword Research, Ahrefs, Writing",   # the user corrects the skills
+                     ""]                                         # Enter accepts the roles that need them
+            run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=said.append,
+                      ask=lambda prompt: queue.pop(0))
+            with open(os.path.join(folder, "seo.json")) as handle:
+                saved = json.load(handle)
+            self.assertEqual(saved["skills"], ["SEO", "Keyword Research", "Ahrefs", "Writing"])
+            self.assertEqual(saved["titles"], VOCAB.suggest_titles(saved["skills"]))
+            self.assertIn("SEO Executive", saved["titles"])
+            self.assertNotIn("seo strategist", saved["titles"])
+            self.assertTrue(any("SEO Executive: 3 of 8 skills it needs" in line for line in said))
+            self.assertTrue(any("Roles saved now: seo strategist" in line for line in said))
+
+    def test_role_matches_need_two_skills(self):
+        self.assertEqual(VOCAB.role_matches(["SEO"]), [])
+        title, matched, _ = VOCAB.role_matches(["GEO", "SEO"])[0]
+        self.assertEqual((title, sorted(matched)), ("GEO Specialist", ["GEO", "SEO"]))
+
+
+class ResumeInSetupTests(unittest.TestCase):
+    """Setup asks for the resume, reads its skills, the user confirms them, then roles follow from them."""
+
+    def test_setup_reads_resume_and_makes_a_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            resume = os.path.join(tmp, "My Resume.txt")
+            with open(resume, "w") as handle:
+                handle.write("SEO, keyword research on Ahrefs and Semrush, Google Search Console, content strategy.")
+            folder = os.path.join(tmp, "profiles")          # does not exist yet: a first-time user
+            said = []
+            queue = ["", "", "", "", "none",
+                     "'" + resume.replace(" ", "\\ ") + "'",   # dragged into the terminal: quotes and "\ "
+                     "seo",                                   # profile name
+                     "",                                      # no more resumes
+                     "",                                      # Enter accepts the skills found
+                     ""]                                      # Enter accepts the roles that need them
+            run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=said.append,
+                      ask=lambda prompt: queue.pop(0))
+            with open(os.path.join(folder, "seo.json")) as handle:
+                saved = json.load(handle)
+            self.assertIn("Ahrefs", saved["skills"])
+            self.assertIn("SEO Executive", saved["titles"])
+            self.assertEqual(saved["titles"], VOCAB.suggest_titles(saved["skills"]))
+            self.assertNotIn(resume, json.dumps(saved))      # the resume path is not stored
+            self.assertTrue(any("Skills found in your resume" in line for line in said))
+
+    def test_missing_resume_file_is_asked_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            said = []
+            queue = ["", "", "", "", "none", os.path.join(tmp, "nope.docx"), ""]
+            run_setup(os.path.join(tmp, "settings.json"), os.path.join(tmp, "profiles"), VOCAB,
+                      say=said.append, ask=lambda prompt: queue.pop(0))
+            self.assertTrue(any("Could not find a file" in line for line in said))
+            self.assertTrue(any("No profiles yet" in line for line in said))
+
+    def test_experience_accepts_a_range(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "settings.json")
+            queue = ["", "", "0-1", "7 days", "none", ""]
+            run_setup(path, os.path.join(tmp, "nope"), VOCAB, say=lambda s: None, ask=lambda prompt: queue.pop(0))
+            with open(path) as handle:
+                saved = json.load(handle)
+            self.assertEqual((saved["max_experience_years"], saved["freshness_days"]), (1, 7))
 
 
 if __name__ == "__main__":
