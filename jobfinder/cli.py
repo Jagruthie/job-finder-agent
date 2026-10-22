@@ -69,11 +69,12 @@ def print_summary(stats, failures, settings, rows=(), profiles=()) -> None:
     print(f"Jobs seen: {stats['jobs_seen']}")
     print(f"  removed as stale (older than {settings['freshness_days']} days): {stats['stale_dropped']}")
     print(f"  skipped, already removed earlier: {stats['already_dropped']}")
-    print(f"  not a role you want (title): {stats['title_mismatch']}")
+    print(f"  not your roles and not enough of your skills: {stats['title_mismatch']}")
     print(f"  too senior (title or years): {stats['senior_title'] + stats['too_senior']}")
     print(f"  dropped for location: {stats['location_dropped']}")
     print(f"  dropped for pay outside your range: {stats['pay_dropped']}")
-    print(f"Kept: {stats['kept']} (of which experience not stated: {stats['kept_experience_not_stated']})")
+    print(f"Kept: {stats['kept']} (of which experience not stated: {stats['kept_experience_not_stated']}; "
+          f"kept for your skills although the title is not on your list: {stats['kept_by_skills']})")
     if len(profiles) > 1:
         print("  per track: " + ", ".join(f"{p['name']} {sum(r['Track'] == p['name'] for r in rows)}"
                                          for p in profiles))
@@ -152,7 +153,7 @@ def cmd_setup(args) -> int:
 def cmd_profile(args) -> int:
     vocab = Vocab.load()
     text = read_resume_text(args.resume)
-    skills = vocab.extract_skills(text)
+    skills = vocab.extract_skills(text) + vocab.resume_phrases(text)
     titles = vocab.suggest_titles(skills)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

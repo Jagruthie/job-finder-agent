@@ -965,5 +965,80 @@ class AlertInboxTests(unittest.TestCase):
         self.assertEqual((len(rows), stats["stale_dropped"]), (0, 3))
 
 
+class SkillsFirstTests(unittest.TestCase):
+    """Jobs can be kept for your skills even when their title is not on your list."""
+
+    def job(self, job_id, title, text, location="Hyderabad", company="Acme"):
+        return Job("demo", "x", company, job_id, title, location, f"https://e/{job_id}", text, NOW)
+
+    def run_jobs(self, jobs, profiles, **settings):
+        return run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], profiles,
+                            {"preferred_locations": ["Hyderabad", "Remote"], **settings}, VOCAB,
+                            {"first_seen": {}, "dropped": {}}, lambda p, b, n: jobs, now=NOW)
+
+    def test_resume_phrases_take_skill_lists_but_not_personal_details(self):
+        text = ("Priya Sharma | Hyderabad | priya@example.com | +91 98765 43210\n"
+                "Skills: Java, Spring Boot, AWS, Docker, Kubernetes, Git, C++, Go\n"
+                "Core skills - Talent Acquisition | Payroll | HRMS\n"
+                "Education: B.Tech, JNTU Hyderabad, 2024\n"
+                "I built a payment service in Java, deployed on AWS, with tests.")
+        self.assertEqual(VOCAB.resume_phrases(text),
+                         ["Java", "Spring Boot", "AWS", "Docker", "Kubernetes", "Talent Acquisition", "Payroll", "HRMS"])
+
+    def test_title_not_listed_but_enough_skills_is_kept_in_your_city_only(self):
+        analyst = {"name": "data", "skills": ["SQL", "Python", "Power BI", "Tableau"], "titles": []}
+        text = "0-1 years of experience. SQL, Python, Power BI and Tableau dashboards."
+        rows, stats, _ = self.run_jobs([self.job("1", "Insights Associate", text),
+                                        self.job("2", "Insights Associate", text, location="Austin, TX"),
+                                        self.job("3", "Insights Associate", "SQL and Python only.")], [analyst])
+        self.assertEqual([r["Apply link"][-1] for r in rows], ["1"])        # 2: wrong city, 3: only 2 skills
+        self.assertEqual(rows[0]["Matched by"], "skills: Python, SQL, Power BI, Tableau")
+        self.assertIn("Power BI", rows[0]["Matched skills"])                  # your own skill, not in the built-in list
+        self.assertEqual(stats["kept_by_skills"], 1)
+
+    def test_titles_only_mode_and_title_matches_rank_first(self):
+        profile = {"name": "pm", "skills": ["SQL", "Python", "Power BI", "Tableau"], "titles": ["Business Analyst"]}
+        text = "0-1 years. SQL, Python, Power BI, Tableau."
+        jobs = [self.job("1", "Insights Associate", text), self.job("2", "Business Analyst", text)]
+        rows, _, _ = self.run_jobs(jobs, [profile])
+        self.assertEqual([(r["Apply link"][-1], r["Matched by"]) for r in rows],
+                         [("2", "role title"), ("1", "skills: Python, SQL, Power BI, Tableau")])
+        rows, _, _ = self.run_jobs(jobs, [profile], match_by="titles")
+        self.assertEqual([r["Apply link"][-1] for r in rows], ["2"])
+
+    def test_boilerplate_and_company_name_skills_do_not_count(self):
+        profile = {"name": "pm", "skills": ["Communication", "Documentation", "Presentation", "Git/GitHub", "SQL"],
+                   "titles": []}
+        filler = [self.job(f"f{i}", "Driver", "Communication, documentation and presentation.") for i in range(25)]
+        jobs = filler + [self.job("1", "Insights Associate", "Communication, documentation, presentation, SQL, git.",
+                                  company="gitlab")]
+        rows, _, _ = self.run_jobs(jobs, [profile])
+        self.assertEqual(rows, [])     # only SQL is specific: the rest is in most jobs, and Git is in the company name
+
+    def test_profile_without_roles_needs_skills_and_skills_mode(self):
+        no_roles = {"name": "x", "skills": ["SQL", "Python", "Tableau"], "titles": []}
+        self.run_jobs([], [no_roles])                                              # allowed
+        with self.assertRaises(ProfileError):
+            self.run_jobs([], [no_roles], match_by="titles")
+        with self.assertRaises(ProfileError):
+            self.run_jobs([], [{"name": "y", "skills": ["SQL"], "titles": []}])
+
+    def test_setup_lets_a_skills_only_track_leave_roles_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            resume = os.path.join(tmp, "cv.txt")
+            with open(resume, "w") as handle:
+                handle.write("Tools: Kubernetes, Terraform, Ansible, Prometheus, Grafana\n")
+            folder = os.path.join(tmp, "profiles")
+            said = []
+            queue = ["", "", "", "", "none", resume, "ops", "", "", ""]   # resume, name, no more, skills, roles
+            run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=said.append,
+                      ask=lambda prompt: queue.pop(0))
+            with open(os.path.join(folder, "ops.json")) as handle:
+                saved = json.load(handle)
+            self.assertEqual(saved["skills"], ["Kubernetes", "Terraform", "Ansible", "Prometheus", "Grafana"])
+            self.assertEqual(saved["titles"], [])
+            self.assertTrue(any("leave them empty" in line for line in said))
+
+
 if __name__ == "__main__":
     unittest.main()

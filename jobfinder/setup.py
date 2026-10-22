@@ -164,7 +164,7 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
             new_skills = _ask_profile_list(ask, say, "Skills", skills, hint, "SEO, Keyword Research", required=False)
             unknown = [s for s in new_skills if s not in vocab.skills]
             if unknown:
-                say("  Not in data/skills.json, so they are saved but not counted when matching jobs: "
+                say("  Not in the built-in list, so these are matched by their exact words in job posts: "
                     + ", ".join(unknown))
         # Roles come from the confirmed skills (each needs at least 2 of them), grouped by category.
         groups = vocab.role_groups(new_skills)
@@ -181,9 +181,15 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
         else:
             say("  None of the built-in roles needs 2 or more of these skills.")
             default, hint = titles, "Enter keeps these"
+        # With matching by skills, a track may have no roles: it then keeps jobs that ask for enough of its skills.
+        skills_only_ok = out["match_by"] != "titles" and len(new_skills) >= out["skill_match_min"]
+        if not default and skills_only_ok:
+            say(f"  You can type the roles you want, or press Enter to leave them empty: this track will then keep "
+                f"jobs in your cities that ask for at least {out['skill_match_min']} of your skills.")
+            hint = "Enter leaves them empty"
         if titles and titles != default:
             say(f"  Roles saved now: {', '.join(titles)}")
-        new_titles = _ask_profile_list(ask, say, "Roles", default, hint, "SEO Executive")
+        new_titles = _ask_profile_list(ask, say, "Roles", default, hint, "SEO Executive", required=not skills_only_ok)
         if file.exists() and new_skills == saved_skills and new_titles == saved_titles:
             continue
         unknown = [t for t in new_titles if t not in vocab.titles]
@@ -213,11 +219,16 @@ def _ask_resumes(ask: Ask, say: Say, profiles_dir: Path, vocab: Vocab, read_resu
             say(f"  Could not find a file at {resume}. Check the path, or drag the file into this window.")
             continue
         try:
-            skills = vocab.extract_skills(read_resume(str(resume)))
+            text = read_resume(str(resume))
         except SystemExit as error:   # unsupported type or a missing reader library
             say(f"  {error}")
             continue
-        say(f"  Found {len(skills)} known skills in {resume.name}."
+        known, extra = vocab.extract_skills(text), vocab.resume_phrases(text)
+        skills = known + extra
+        say(f"  Found {len(skills)} skills in {resume.name}"
+            + (f", including {len(extra)} from your own skill lists that the built-in list does not know"
+               f" ({', '.join(extra[:5])}{', ...' if len(extra) > 5 else ''}). Delete any that are not skills."
+               if extra else ".")
             + ("" if skills else " You can type your skills in the next step."))
         name = _ask_profile_name(ask, say, resume.stem)
         file = profiles_dir / f"{name}.json"

@@ -13,8 +13,11 @@ It reads only public job lists that Greenhouse, Lever and Ashby publish for comp
    - **Two interests?** Each profile is one *track*. Give two resumes (for example `pm` and `seo`), or give one resume and split the other category into its own track when setup offers it.
 3. Fetches open jobs for the companies in your `companies.csv`.
 4. Removes jobs older than 7 days and remembers them, so they never return as new.
-5. Keeps only the roles you want, asking for 0 to 1 years of experience (jobs that do not state it go in a review bucket).
-6. Matches your skills against the skills each job mentions, and shows its reasons.
+5. Keeps the jobs that fit you, in two ways:
+   - **by role title:** the title matches a role you chose (any city; other cities rank lower), or
+   - **by skills:** the title is not on your list, but the job asks for at least 3 of your specific skills, and you have at least half of the skills it mentions. These must be in your cities. Skills found in most postings (hiring notices, "communication") and skills in the company's own name do not count here.
+   Either way, jobs asking for more experience than you set are removed (jobs that do not state it go in a review bucket).
+6. Shows its reasons: which skills matched, which are missing, and whether a job was kept for its title or its skills.
 7. Writes `output/jobs-<date>.csv`, best matches first.
 
 ## Try it first on fake jobs
@@ -89,7 +92,8 @@ Good to know:
 | Apply link | The exact page where you apply |
 | Posted / Date basis | The platform's date, or "first seen" when the platform gives none. First-seen dates start counting on your first run, so their real age is unknown |
 | Experience bucket | "Within your range": the posting states years that fit your setting. "Entry-level title (years not stated)": no years given, but the title says Associate, Junior, Trainee, Graduate or "I" (as in Product Manager I). "Not stated (review)": no years and no sign either way, so read it. Ranked in that order. Titles marked II, III or IV are removed as above entry level |
-| Fit % | Share of the skills the job mentions that are on your profile. Only skills in `data/skills.json` are counted |
+| Matched by | "role title", or "skills: ..." with the specific skills that earned a job its place when its title is not on your list. Title matches rank above skills matches |
+| Fit % | Share of the skills the job mentions that are on your profile. Built-in skills (`data/skills.json`) and your own skills (matched by their exact words) both count |
 | Missing skills | Skills the job mentions that are not on your profile |
 | Location match / Shift | Preferences only. They raise a job's rank and never remove it |
 | Company email / Founder X handle | Only what you typed into `companies.csv` |
@@ -101,7 +105,7 @@ Run `python -m jobfinder setup`. It asks a few questions in the terminal and sav
 | Question | Setting | Where it is saved |
 | --- | --- | --- |
 | Your resume (optional on later runs). Read locally; the file is not copied and its path is not saved | `skills` | a profile file in `profiles/` |
-| Skills: the ones found in your resume, which you confirm or edit | `skills` | each profile file in `profiles/` |
+| Skills: the ones found in your resume, which you confirm or edit. Besides the built-in list, it picks up items from your resume's own skill lists (such as "Tools: Power BI, Tableau"), never your name, email, phone, cities or education | `skills` | each profile file in `profiles/` |
 | Categories this track searches, when your skills fit roles in more than one. The rest can become a separate track | — | a new profile file |
 | Roles: the ones that need 2 or more of your skills, which you confirm or edit | `titles` | each profile file in `profiles/` |
 | Cities | `preferred_locations`, `location_mode` | `settings.json` |
@@ -109,7 +113,7 @@ Run `python -m jobfinder setup`. It asks a few questions in the terminal and sav
 | Posted within how many days | `freshness_days` | `settings.json` |
 | Pay you want, typed your own way, such as `8 LPA`, `more than 8 lakhs`, `6-12 LPA`, `up to 10 LPA` or `$80k` | `min_annual_pay`, `max_annual_pay`, `pay_currency`, `pay_mode` | `settings.json` |
 
-You can also edit these files by hand. Other settings: `exclude_title_words`, `request_delay_seconds`. Backup copies named `*.backup.json` in `profiles/` are ignored.
+Roles can be left empty for a track that should match by skills only. You can also edit these files by hand. Other settings: `exclude_title_words`, `request_delay_seconds`, `remote_country` (default India), `match_by` (`titles_or_skills`, or `titles` to keep only listed roles), `skill_match_min` (default 3) and `skill_match_share` (default 50). Backup copies named `*.backup.json` in `profiles/` are ignored.
 
 **How pay works.** `setup` repeats back what it understood. In `prefer` mode, jobs whose stated pay is outside your range stay on the list but rank lower. In `require` mode they are removed. Jobs that do not state pay are always kept, because most postings do not. Pay is only compared when the posting uses your currency, and it is never converted. Monthly pay is multiplied by 12. Hourly pay, and bare numbers with no sign of a period, are treated as not comparable, because guessing would wrongly remove good jobs.
 
@@ -127,7 +131,8 @@ Never committed (see `.gitignore`): your resumes, your profiles, `settings.json`
 
 - **Coverage.** Only companies on Greenhouse, Lever or Ashby can be read, and only the ones you list.
 - **Dates can mislead.** Greenhouse and Ashby dates can change when a company edits or reposts an old job, so a few stale jobs will look fresh.
-- **Skills matching is word matching.** It misses ideas that are not in `data/skills.json`. Add your own words there.
+- **Skills matching is word matching.** It finds exact words, not ideas: "built dashboards" does not count as Power BI. Very short skills (Go, R, C++) are skipped because their letters match ordinary words. Add aliases in `data/skills.json` to help.
+- **Matching by skills is a wider net.** On real postings it mostly found sensible leads, but some are loose. If it brings in jobs you do not want, raise `skill_match_min`, or set `match_by` to `titles`.
 - **Experience reading is a guess from text.** Check the Experience column.
 - **Platform rules.** The platforms' API docs state no usage terms, but check their terms yourself, and keep the request delay.
 - **Not built yet:** finding companies automatically, and finding company emails and founder handles automatically.

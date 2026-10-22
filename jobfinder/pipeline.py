@@ -12,7 +12,7 @@ from .filters import (NOT_STATED, TOO_SENIOR, WITHIN, entry_level_title, experie
                       title_matches)
 from .models import Job
 from .sources import SourceError
-from .textutil import norm, parse_dt
+from .textutil import has_phrase, norm, parse_dt
 from .vocab import Vocab
 
 DEFAULT_SETTINGS = {
@@ -26,11 +26,15 @@ DEFAULT_SETTINGS = {
     "max_annual_pay": None,             # optional upper end of your range. None means no maximum
     "pay_mode": "prefer",               # "prefer" ranks outside-range jobs lower, "require" drops jobs whose stated pay is outside your range
     "exclude_title_words": ["senior", "sr", "lead", "head", "director", "vp", "principal", "staff"],
+    # Keep a job whose title is not on your list when it asks for enough of your skills.
+    "match_by": "titles_or_skills",     # or "titles" to keep only jobs whose title is on your list
+    "skill_match_min": 3,               # at least this many of your skills in the job
+    "skill_match_share": 50,            # and at least this % of the skills the job mentions
     "request_delay_seconds": 1.5,
 }
 
 COLUMNS = [
-    "Rank", "Track", "Company", "Role", "Apply link", "Posted", "Date basis",
+    "Rank", "Track", "Company", "Role", "Matched by", "Apply link", "Posted", "Date basis",
     "Experience", "Experience bucket", "Fit %", "Matched skills", "Missing skills",
     "Location", "Location match", "Shift 10-6 mentioned", "Pay", "Pay check",
     "Company email", "Founder X handle", "Platform",
@@ -102,7 +106,28 @@ def prepare_profile(profile: dict, vocab: Vocab) -> dict:
     phrases: List[str] = []
     for title in clean_list(profile.get("titles", [])):
         phrases.extend(vocab.title_phrases(title))
-    return {**profile, "_phrases": sorted(set(phrases)), "_skills": set(clean_list(profile.get("skills", [])))}
+    skills = clean_list(profile.get("skills", []))
+    # Skills you confirmed that are not in data/skills.json are matched by their own words in the job text.
+    own = [(skill, norm(skill)) for skill in skills if skill not in vocab.skills and len(norm(skill)) >= 3]
+    return {**profile, "_phrases": sorted(set(phrases)), "_skills": set(skills), "_own_skills": own}
+
+
+def common_skills(found_per_job: List[List[str]], share: float = 0.2, minimum_jobs: int = 20) -> set:
+    """Skills mentioned in more than `share` of the jobs, when there are enough jobs to tell."""
+    if len(found_per_job) < minimum_jobs:
+        return set()
+    counts = Counter(skill for found in found_per_job for skill in set(found))
+    return {skill for skill, count in counts.items() if count > share * len(found_per_job)}
+
+
+def skill_fit(profile: dict, found: List[str], text_norm: str, ignore: frozenset = frozenset()):
+    """(skills of yours the job mentions, skills it mentions that you lack, % of its skills you have).
+    Skills in `ignore` are left out of all three."""
+    found = found + [skill for skill, key in profile["_own_skills"] if has_phrase(text_norm, key)]
+    found = [skill for skill in found if skill not in ignore]
+    matched = [s for s in found if s in profile["_skills"]]
+    missing = [s for s in found if s not in profile["_skills"]]
+    return matched, missing, (round(100 * len(matched) / len(found)) if found else None)
 
 
 def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vocab: Vocab,
@@ -111,12 +136,14 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
     now = now or datetime.now(timezone.utc)
     cfg = {**DEFAULT_SETTINGS, **settings}
     prepared = [prepare_profile(p, vocab) for p in profiles]
+    by_skills = cfg["match_by"] != "titles"
     for profile in prepared:
-        if not profile["_phrases"]:
+        if not profile["_phrases"] and not (by_skills and len(profile["_skills"]) >= cfg["skill_match_min"]):
             raise ProfileError(
-                f"Stopped: profile '{profile.get('name', '?')}' has no usable roles, so no jobs were screened. "
-                "(Empty lists and words such as 'keep' do not count as roles.) "
-                "Run 'python -m jobfinder setup' to set its roles, or add them to the 'titles' list in its file.")
+                f"Stopped: profile '{profile.get('name', '?')}' has no usable roles"
+                + (f" and fewer than {cfg['skill_match_min']} skills" if by_skills else "")
+                + ", so no jobs were screened. (Empty lists and words such as 'keep' do not count.) "
+                "Run 'python -m jobfinder setup' to set its roles and skills, or edit its file.")
     first_seen: Dict[str, str] = state.setdefault("first_seen", {})
     dropped: Dict[str, str] = state.setdefault("dropped", {})
     stats: Counter = Counter()
@@ -124,6 +151,8 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
     rows: List[dict] = []
     max_age = timedelta(days=cfg["freshness_days"])
 
+    # Pass 1: read every company and keep the fresh jobs.
+    fresh = []
     for index, company in enumerate(companies):
         if index:
             sleep(cfg["request_delay_seconds"])
@@ -151,86 +180,109 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
                 first_seen.pop(job.key, None)
                 stats["stale_dropped"] += 1
                 continue
-
-            candidates = [p for p in prepared if title_matches(job.title, p["_phrases"])]
-            if not candidates:
-                stats["title_mismatch"] += 1
-                continue
-            role_phrases = [phrase for profile in candidates for phrase in profile["_phrases"]]
-            if has_excluded_word(job.title, cfg["exclude_title_words"], role_phrases) or higher_level_title(job.title):
-                stats["senior_title"] += 1
-                continue
-
             text = f"{job.title}. {job.description}"
-            bucket, exp_text = experience_bucket(text, cfg["max_experience_years"])
-            if bucket == TOO_SENIOR:
-                stats["too_senior"] += 1
-                continue
-            # 0: years stated and within range, 1: years not stated but the title says entry level, 2: not stated
-            level = 0 if bucket == WITHIN else (1 if entry_level_title(job.title) else 2)
+            fresh.append((company, job, posted, basis, text, vocab.extract_skills(text)))
 
-            loc_ok = location_matches(job.location, cfg["preferred_locations"], cfg["remote_country"])
-            if cfg["location_mode"] == "require" and not loc_ok:
-                stats["location_dropped"] += 1
-                continue
+    # Skills found in a large share of this run's jobs are boilerplate (hiring notices, "communication"),
+    # so they do not count when keeping a job for its skills alone.
+    common = common_skills([found for *_, found in fresh])
 
-            pay_text = job.pay_text or pay_from_text(job.description) or ""
-            annual = parse_annual_pay(pay_text, cfg["pay_currency"])
-            min_pay, max_pay = cfg.get("min_annual_pay"), cfg.get("max_annual_pay")
-            if min_pay is None and max_pay is None:
-                pay_check, pay_tier = "No pay range set", 1
-            elif annual is None:
-                pay_check, pay_tier = "Not stated or not comparable", 1
-            elif min_pay is not None and annual[1] < min_pay:
-                pay_check, pay_tier = "Below your range", 2
-            elif max_pay is not None and annual[0] > max_pay:
-                pay_check, pay_tier = "Above your range", 2
-            else:
-                pay_check, pay_tier = "Within your range", 0
-            if cfg["pay_mode"] == "require" and pay_tier == 2:
-                stats["pay_dropped"] += 1
-                continue
+    # Pass 2: screen each fresh job.
+    for company, job, posted, basis, text, found in fresh:
+        text_norm = norm(text)
+        fits = {p["name"]: skill_fit(p, found, text_norm) for p in prepared}
+        candidates = [p for p in prepared if title_matches(job.title, p["_phrases"])]
+        matched_by = "role title"
+        if not candidates and by_skills:
+            # Skills in the company's own name (Git at GitLab) say nothing about the job either.
+            ignore = common | vocab.skills_in_name(job.company)
+            specific = {}
+            for profile in prepared:
+                matched, _, pct = skill_fit(profile, found, text_norm, ignore)
+                if len(matched) >= cfg["skill_match_min"] and (pct or 0) >= cfg["skill_match_share"]:
+                    candidates.append(profile)
+                    specific[profile["name"]] = matched
+            matched_by = "skills"
+        if not candidates:
+            stats["title_mismatch"] += 1
+            continue
+        role_phrases = [phrase for profile in candidates for phrase in profile["_phrases"]]
+        if has_excluded_word(job.title, cfg["exclude_title_words"], role_phrases) or higher_level_title(job.title):
+            stats["senior_title"] += 1
+            continue
 
-            found = vocab.extract_skills(text)
-            best = None
-            for profile in candidates:
-                matched = [s for s in found if s in profile["_skills"]]
-                missing = [s for s in found if s not in profile["_skills"]]
-                pct = round(100 * len(matched) / len(found)) if found else None
-                if best is None or (pct if pct is not None else -1) > (best[1] if best[1] is not None else -1):
-                    best = (profile["name"], pct, matched, missing)
-            track, pct, matched, missing = best
+        bucket, exp_text = experience_bucket(text, cfg["max_experience_years"])
+        if bucket == TOO_SENIOR:
+            stats["too_senior"] += 1
+            continue
+        # 0: years stated and within range, 1: years not stated but the title says entry level, 2: not stated
+        level = 0 if bucket == WITHIN else (1 if entry_level_title(job.title) else 2)
 
-            rows.append({
-                "Track": track,
-                "Company": job.company,
-                "Role": job.title,
-                "Apply link": job.url,
-                "Posted": posted.date().isoformat(),
-                "Date basis": basis,
-                "Experience": exp_text or "Not stated",
-                "Experience bucket": BUCKET_LABELS[level],
-                "Fit %": "" if pct is None else pct,
-                "Matched skills": ", ".join(matched),
-                "Missing skills": ", ".join(missing),
-                "Location": job.location,
-                "Location match": "yes" if loc_ok else "no",
-                "Shift 10-6 mentioned": "yes" if shift_mentioned(text) else "",
-                "Pay": pay_text or "Not stated",
-                "Pay check": pay_check,
-                "Company email": company.get("email", ""),
-                "Founder X handle": company.get("x_handle", ""),
-                "Platform": job.platform,
-                "_sort": (level,
-                          pay_tier,
-                          0 if loc_ok else 1,
-                          0 if shift_mentioned(text) else 1,
-                          -(pct if pct is not None else -1),
-                          -posted.timestamp()),
-            })
-            stats["kept"] += 1
-            if bucket == NOT_STATED:
-                stats["kept_experience_not_stated"] += 1
+        loc_ok = location_matches(job.location, cfg["preferred_locations"], cfg["remote_country"])
+        # A job kept only for its skills must be in your cities: that wider net needs a tighter place.
+        if (cfg["location_mode"] == "require" or matched_by == "skills") and not loc_ok:
+            stats["location_dropped"] += 1
+            continue
+
+        pay_text = job.pay_text or pay_from_text(job.description) or ""
+        annual = parse_annual_pay(pay_text, cfg["pay_currency"])
+        min_pay, max_pay = cfg.get("min_annual_pay"), cfg.get("max_annual_pay")
+        if min_pay is None and max_pay is None:
+            pay_check, pay_tier = "No pay range set", 1
+        elif annual is None:
+            pay_check, pay_tier = "Not stated or not comparable", 1
+        elif min_pay is not None and annual[1] < min_pay:
+            pay_check, pay_tier = "Below your range", 2
+        elif max_pay is not None and annual[0] > max_pay:
+            pay_check, pay_tier = "Above your range", 2
+        else:
+            pay_check, pay_tier = "Within your range", 0
+        if cfg["pay_mode"] == "require" and pay_tier == 2:
+            stats["pay_dropped"] += 1
+            continue
+
+        best = None
+        for profile in candidates:
+            matched, missing, pct = fits[profile["name"]]
+            if best is None or (pct if pct is not None else -1) > (best[1] if best[1] is not None else -1):
+                best = (profile["name"], pct, matched, missing)
+        track, pct, matched, missing = best
+        if matched_by == "skills":
+            matched_by = f"skills: {', '.join(specific[track])}"
+            stats["kept_by_skills"] += 1
+
+        rows.append({
+            "Track": track,
+            "Company": job.company,
+            "Role": job.title,
+            "Matched by": matched_by,
+            "Apply link": job.url,
+            "Posted": posted.date().isoformat(),
+            "Date basis": basis,
+            "Experience": exp_text or "Not stated",
+            "Experience bucket": BUCKET_LABELS[level],
+            "Fit %": "" if pct is None else pct,
+            "Matched skills": ", ".join(matched),
+            "Missing skills": ", ".join(missing),
+            "Location": job.location,
+            "Location match": "yes" if loc_ok else "no",
+            "Shift 10-6 mentioned": "yes" if shift_mentioned(text) else "",
+            "Pay": pay_text or "Not stated",
+            "Pay check": pay_check,
+            "Company email": company.get("email", ""),
+            "Founder X handle": company.get("x_handle", ""),
+            "Platform": job.platform,
+            "_sort": (level,
+                      0 if matched_by == "role title" else 1,
+                      pay_tier,
+                      0 if loc_ok else 1,
+                      0 if shift_mentioned(text) else 1,
+                      -(pct if pct is not None else -1),
+                      -posted.timestamp()),
+        })
+        stats["kept"] += 1
+        if bucket == NOT_STATED:
+            stats["kept_experience_not_stated"] += 1
 
     # Grouped by track (in the order the profiles were given), best first inside each track.
     order = {profile["name"]: index for index, profile in enumerate(prepared)}

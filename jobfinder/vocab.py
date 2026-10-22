@@ -5,9 +5,16 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from .textutil import norm
+from .filters import INDIA_PLACES
+from .textutil import has_phrase, norm
 
 DEFAULT_PATH = Path(__file__).resolve().parent.parent / "data" / "skills.json"
+_CONTACT = re.compile(r"@|https?://|www\.|\+?\d[\d\s-]{8,}\d")
+_LABEL = re.compile(r"^\s*([^:,;|•·]{1,40}?)\s*(?::|\s[-–]\s)\s*(.*)$")
+_NOT_SKILL_LABELS = {"education", "contact", "address", "email", "phone", "location", "name", "languages",
+                     "certifications", "awards", "hobbies", "interests", "references"}
+_STOP_WORDS = {"and", "or", "the", "a", "an", "of", "to", "in", "on", "for", "with", "at", "by", "from", "as",
+               "is", "are", "was", "were", "my", "our", "i", "we", "etc"}
 
 
 class Vocab:
@@ -45,6 +52,42 @@ class Vocab:
 
     def suggest_titles(self, skills: List[str], limit: int = 6) -> List[str]:
         return [title for title, _, _ in self.role_matches(skills, limit)]
+
+    def resume_phrases(self, text: str, limit: int = 20) -> List[str]:
+        """Skills listed in a resume that are not in the built-in list, such as 'Power BI' or 'Kubernetes'.
+        Only items from list-like lines ('Tools: Jira, Figma, Power BI') are taken, so sentences,
+        company names and cities are left out. Very short ones ('Go', 'R', 'C++') are skipped, because
+        their letters alone would match ordinary words in job posts."""
+        known = {phrase for phrases in self._skill_phrases.values() for phrase in phrases}
+        found: List[str] = []
+        for line in (text or "").splitlines():
+            if _CONTACT.search(line):
+                continue                      # a name / email / phone line: never treat it as skills
+            labelled = _LABEL.match(line)          # "Skills: a, b, c" or "Core skills - a | b | c"
+            if labelled:
+                if norm(labelled.group(1)) in _NOT_SKILL_LABELS:
+                    continue
+                line = labelled.group(2)
+            items = [item.strip(" .-–•·*\t") for item in re.split(r"[,;|•·]", line)]
+            items = [item for item in items if item]
+            short = [item for item in items if len(item.split()) <= 3 and len(item) <= 30]
+            if len(items) < 3 or len(short) < 0.8 * len(items):     # a list, not a sentence with commas
+                continue
+            for item in short:
+                key = norm(item)
+                if (len(key) < 3 or not re.search(r"[a-z]", key) or key in known
+                        or any(has_phrase(key, place) for place in INDIA_PLACES)
+                        or key.split()[0] in _STOP_WORDS
+                        or key in {norm(f) for f in found}):
+                    continue
+                found.append(item)
+        return found[:limit]
+
+    def skills_in_name(self, name: str) -> set:
+        """Skills whose words sit inside a company name: Git/GitHub for 'gitlab', Notion for 'Notion'."""
+        squashed = norm(name).replace(" ", "")
+        return {skill for skill, phrases in self._skill_phrases.items()
+                if any(len(p) >= 3 and p.replace(" ", "") in squashed for p in phrases)}
 
     def category(self, title: str) -> str:
         """The group a role belongs to, such as 'Product & Strategy' or 'SEO & Content'."""
