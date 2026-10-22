@@ -1,174 +1,206 @@
 # Job Finder Agent
 
-Finds **fresh** jobs on company career pages, keeps the ones that match the skills on your resume, and writes a CSV with the exact link to apply.
+Finds **fresh** jobs that fit your resume, and writes a CSV with the exact link to apply. You stay in charge: it never applies, sends or posts anything for you.
 
-It reads only public job lists that Greenhouse, Lever and Ashby publish for company career pages. It does not scrape LinkedIn, does not use paid services, and does not send anything on your behalf.
+It reads public job lists (company boards on Greenhouse, Lever and Ashby, and the remote-job boards Himalayas and Remote OK), plus job-alert emails you save from LinkedIn. It does not scrape LinkedIn or any other site, uses no paid services, and keeps your resume and settings on your own computer.
 
-> **Status: version 0.1.** The logic is tested with fake jobs (`python -m unittest discover -s tests`). It has **not yet been run against live career pages**, so expect to fix a field name or two on the first real run.
+> **Status: version 0.1.** Tested with fake jobs (`python -m unittest discover -s tests`, all offline) and run against live job boards in October 2026. Only tested on macOS with Python 3.14; other systems and Python versions are untested.
 
-## What it does
+## How it works
 
-1. Asks for your resume and reads it on your own computer. It lists the skills it finds.
-2. **You confirm or edit those skills.** Then it lists the roles that need those skills, grouped by category (for example Product & Strategy, SEO & Content), with the reasons. You pick the categories and confirm the roles. This is the confirm step.
-   - **Two interests?** Each profile is one *track*. Give two resumes (for example `pm` and `seo`), or give one resume and split the other category into its own track when setup offers it.
-3. Fetches open jobs for the companies in your `companies.csv`.
-4. Removes jobs older than 7 days and remembers them, so they never return as new.
-5. Keeps the jobs that fit you, in two ways:
-   - **by role title:** the title matches a role you chose (any city; other cities rank lower), or
-   - **by skills:** the title is not on your list, but the job asks for at least 3 of your specific skills, and you have at least half of the skills it mentions. These must be in your cities. Skills found in most postings (hiring notices, "communication") and skills in the company's own name do not count here.
-   Either way, jobs asking for more experience than you set are removed (jobs that do not state it go in a review bucket).
-6. Applies each track's **priorities and deal-breakers**: jobs needing more of your priority skills rank higher, and a track can refuse work it should not depend on (built in: **Coding**). A post naming 4 or more different coding terms (Python, Java, backend, write code, ...) or with Engineer/Developer in its title is removed; one naming 2–3 is kept but flagged ("mentions coding: sql, apis") and ranked lower. On 105 real PM-type postings (October 2026), 78% named 0–1 coding terms and 3% named 4 or more; on 644 engineering postings, 69% named 4 or more.
-7. Shows its reasons: which skills matched, which priority skills it needs, any deal-breaker flag, and whether a job was kept for its title or its skills.
-8. Writes `output/jobs-<date>.csv`, best matches first.
+1. **Setup** asks a few questions (cities, experience, freshness, pay) and reads your resume on your computer.
+2. **You confirm the skills** it found. It then lists the roles that need those skills, grouped by category (for example Product & Strategy, SEO & Content), with the reasons, and you confirm the roles.
+3. For each track you can also set **priority skills** (what the job should mainly be about) and **deal-breakers** (work it must not depend on; built in: Coding).
+4. **Every run** reads all sources fresh and applies your saved filters. A rerun repeats the same search with today's jobs.
+5. You open the CSV, read the reasons, and apply yourself.
 
-## Try it first on fake jobs
+**Two interests?** Each profile is one *track*, such as `pm` and `seo`. Give two resumes, or give one resume and split the second category into its own track when setup offers it. Results are grouped and counted per track.
+
+## Install
+
+You need Python 3 (tested with 3.14) and a terminal.
 
 ```bash
-python -m jobfinder demo
+git clone https://github.com/Jagruthie/job-finder-agent.git
 ```
 
-This runs every profile in `profiles/` (or the ones you name with `--profiles`) against 12 invented jobs built to trigger each rule (fresh, stale, too senior, experience not stated). Nothing is fetched and no memory is saved. It writes `output/demo-<date>.csv`.
+```bash
+cd job-finder-agent && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+```
+
+On Windows, activate with `.venv\Scripts\activate` instead of `source .venv/bin/activate`.
 
 ## Quick start
 
 ```bash
-pip install -r requirements.txt
-
-# 1. Answer a few questions and give your resume (drag the file into the terminal).
-#    You confirm the skills it finds, then the roles that need them.
-#    One profile per resume, for example "pm" and "seo".
-python -m jobfinder setup
-
-# 2. Add companies hiring in your city (see "Find companies hiring near you" below)
-python -m jobfinder add "https://jobs.lever.co/acme/123"
-
-# 3. Run it (daily is a good rhythm)
-python -m jobfinder run          # every profile in profiles/, one track each
+python -m jobfinder setup     # questions, your resume, skills, roles, priorities, deal-breakers
+python -m jobfinder demo      # try it on 12 invented jobs (no internet)
+python -m jobfinder run       # the real search; daily is a good rhythm
 ```
 
-On Windows, use `copy` instead of `cp`.
+Then open the newest file in `output/`, for example `output/jobs-2026-10-22.csv`.
+
+## All commands
+
+| Command | What it does |
+| --- | --- |
+| `setup` | Asks your preferences, reads your resume, and saves your settings and profiles. Run it again any time to change them |
+| `demo` | Runs your profiles against 12 invented jobs built to trigger each rule. Nothing is fetched or remembered |
+| `run` | Reads every source, keeps the jobs that fit, writes `output/jobs-<date>.csv` |
+| `add <links or file>` | Adds companies from job links or a saved page of search results |
+| `discover yc` | Finds Y Combinator startups to watch (add `--remote` for remote-hiring ones) |
+| `profile <resume> --name pm` | Makes a profile from a resume without the questions (setup does this too) |
 
 ## Where jobs come from
 
-Every run uses your saved filters on all of these, so a rerun repeats the same search with fresh jobs:
+Every run uses your saved filters on all of these:
 
-| Source | What it is | Follows your filters how |
+| Source | What it is | How your filters apply |
 | --- | --- | --- |
-| Starter company list (`data/companies-starter.csv`) | About 20 companies checked to have jobs in India or remote-India on their public Greenhouse, Lever or Ashby boards | All their jobs are read; your city, role, skills and experience filters pick the right ones. Turn off with `"starter_companies": false` |
-| Your companies (`companies.csv`) | Companies you or `add` / `discover` added | Same as above |
+| Starter company list (`data/companies-starter.csv`) | About 20 companies checked to have jobs in India or remote-India on their Greenhouse, Lever or Ashby boards | All their jobs are read; your filters pick the right ones. Turn off with `"starter_companies": false` |
+| Your companies (`companies.csv`) | Companies you added with `add` or `discover`, or by hand | Same as above |
 | Remote job boards: [Himalayas](https://himalayas.app) and [Remote OK](https://remoteok.com) | Free public feeds of remote jobs | Used when "Remote" is one of your places. Only jobs open to your `remote_country` (default India) or worldwide are kept |
 | Job-alert emails in `inbox/` | LinkedIn alerts you saved | The alert's own search, then your filters on top |
 
-**Remote job boards.** Himalayas is searched for jobs open to your country, newest first; Remote OK's feed is filtered to jobs that clearly say worldwide, India, Asia or APAC (half its jobs give no location, so those are skipped). Each source is downloaded at most once a day and kept in `cache/`, as they ask. Their apply links are kept unchanged and the Platform column names the source, which is how their terms ask to be credited. Not used: Remotive (its free feed returns only 10 jobs; the full API is paid) and Product Hunt (its API needs an account, has no jobs, and is non-commercial by default).
+**Remote job boards.** Himalayas is searched for jobs open to your country, newest first. Remote OK's feed is filtered to jobs that clearly say worldwide, India, Asia or APAC; about half of its jobs give no location, so those are skipped. Each source is downloaded at most once a day and kept in `cache/`, as they ask. Their apply links are kept unchanged and the Platform column names the source, which is how their terms ask to be credited.
 
-## Find startups from Y Combinator
+**Not used:** Remotive (its free feed returns only 10 jobs; the full API is paid), Product Hunt (its API needs an account, has no jobs, and is non-commercial by default), and sites that do not allow automated reading, such as LinkedIn, Naukri and Indeed.
 
-```bash
-python -m jobfinder discover yc            # YC companies that are hiring and located in India
-python -m jobfinder discover yc --remote   # also YC companies that hire remotely (slower)
-```
+## Add companies
 
-It reads an unofficial daily copy of Y Combinator's list of hiring companies (on your computer; the list is not stored in this repo, because it states no license), tries each company's likely board name on Greenhouse, Lever and Ashby, shows what it finds, and asks before adding the ones with jobs in India or remote-India to `companies.csv`.
+### From jobs in your city (location first)
 
-Expect most YC companies not to be found: in October 2026, 7 of 50 India-based hiring YC companies used these three platforms; the rest use other systems or YC's own job pages, which this agent cannot read. A guessed board name can belong to a different company with the same name, which is why only boards with jobs in India are added; check new names in `companies.csv`.
-
-## Find companies hiring near you (location first)
-
-Guessing company names finds few jobs in your city. It works much better to start from jobs that are already in your city, then add the companies behind them.
+Guessing company names finds few jobs in your city. It works much better to start from jobs that are already there.
 
 1. Search the web yourself, for example (change the city and words):
    - `site:jobs.lever.co Hyderabad`
    - `site:boards.greenhouse.io Hyderabad` and `site:job-boards.greenhouse.io Hyderabad`
    - `site:jobs.ashbyhq.com Hyderabad`
-   - add role words to narrow it: `site:jobs.lever.co Hyderabad "product analyst"`
+   - narrow it with role words: `site:jobs.lever.co Hyderabad "product analyst"`
 2. Give the links to the agent. Paste them, or save the search results page and give the file:
 
    ```bash
    python -m jobfinder add "https://jobs.lever.co/acme/123" "https://boards.greenhouse.io/beta/jobs/9"
+   ```
+
+   ```bash
    python -m jobfinder add ~/Downloads/search-results.html
    ```
 
-   It finds every Greenhouse, Lever and Ashby link, reads each company's public job list once, shows how many jobs are in your cities, and asks before adding the ones with jobs there to `companies.csv`. Use `--all` to also add companies with jobs elsewhere.
+It finds every Greenhouse, Lever and Ashby link, reads each company's public job list once, shows how many jobs are in your cities, and asks before adding the ones with jobs there. Use `--all` to also add companies with jobs elsewhere. The agent does not search the web by itself, because search engines do not allow automated searching. EU-hosted boards (`jobs.eu.lever.co`, `boards.eu.greenhouse.io`) are not supported yet.
 
-The agent does not run web searches by itself, because search engines do not allow automated searching. Only Greenhouse, Lever and Ashby links can be added; EU-hosted boards (`jobs.eu.lever.co`, `boards.eu.greenhouse.io`) are not supported yet.
+By hand: `boards.greenhouse.io/acme` means platform `greenhouse`, board `acme`; `jobs.lever.co/acme` means `lever`; `jobs.ashbyhq.com/acme` means `ashby`.
 
-You can also add a company by hand: `boards.greenhouse.io/acme` means platform `greenhouse`, board `acme`. `jobs.lever.co/acme` means `lever`. `jobs.ashbyhq.com/acme` means `ashby`.
+### From Y Combinator
+
+```bash
+python -m jobfinder discover yc
+```
+
+```bash
+python -m jobfinder discover yc --remote
+```
+
+It reads an unofficial daily copy of Y Combinator's list of hiring companies on your computer (it is not stored in this repo, because it states no license), tries each company's likely board name on Greenhouse, Lever and Ashby, and asks before adding the ones with jobs in India or remote-India. Expect most not to be found: in October 2026, 7 of 50 India-based hiring YC companies used these platforms. A guessed board name can belong to a different company with the same name, which is why only boards with jobs in India are added; check new names in `companies.csv`.
 
 ## Add jobs from job-alert emails (LinkedIn)
 
-Many jobs, especially at startups, agencies and large companies, are on job sites this agent cannot read. Set up free job alerts there, then let the agent screen what they send you.
+Many jobs, especially at startups, agencies and large companies, are on sites this agent cannot read. Set up free job alerts there and let the agent screen what they send you.
 
-1. Create job alerts on LinkedIn for each track (for example "Associate Product Manager, Hyderabad" and "SEO Executive, Hyderabad").
+1. Create LinkedIn job alerts for each track, for example "Associate Product Manager, Hyderabad" and "SEO Executive, Hyderabad".
 2. Save the alert emails as `.eml` files in the `inbox/` folder. In Gmail: open the email, then More (⋮) > **Download message**. Do not forward them; forwarding changes the layout.
-3. Run as usual: `python -m jobfinder run`. Jobs from the emails go through the same role, entry-level, location and freshness checks, are filed under the right track, and the same job in two emails appears once.
+3. Run as usual. Jobs from the emails go through the same checks, are filed under the right track, and a job in two emails appears once.
 
 Good to know:
 
-- **Only LinkedIn alert emails are understood so far.** Emails from other senders are listed as "not supported yet". Other sites (Naukri, Cutshort, Instahyre, Wellfound) need a sample email each before they can be added.
-- **Links are cleaned.** Alert links carry tracking codes and one-time login tokens. The agent keeps only the plain job address, such as `https://www.linkedin.com/jobs/view/123/`.
-- **Dates and skills are limited.** An alert email does not say when a job was posted, so the email's date is used (the job may be older). It also has no job description, so Fit % is usually empty for these jobs.
-- **Privacy.** `inbox/` is in `.gitignore`: these emails contain your name and email address and stay on your computer. Everything is read locally.
+- **Only LinkedIn alert emails are understood so far**, tested on one sample. Other senders are listed as "not supported yet"; each needs a sample email before it can be added.
+- **Links are cleaned.** Alert links carry tracking codes and one-time login tokens; only the plain job address (such as `https://www.linkedin.com/jobs/view/123/`) is kept.
+- **Less detail.** An alert email has no posting date (the email's date is used, so the job may be older) and no description (Fit % is usually empty).
+
+## Which jobs are kept
+
+A job is kept when it is fresh (posted within your `freshness_days`), not too senior, and fits a track in one of two ways:
+
+- **By role title:** the title matches a role you chose. Jobs in other cities are kept but rank lower (unless you chose to remove them).
+- **By skills:** the title is not on your list, but the job asks for at least 3 of your specific skills, you have at least half of the skills it mentions, and it is in your cities or remote in your country. In a track with roles or priority skills, it must also need at least 2 of that track's specific skills, so a PM track does not pick up developer jobs because you know Python and SQL. Broad skills (`generic_skills` in `data/skills.json`, such as research, communication and Excel), skills found in most postings of a run (hiring notices) and skills in the company's own name do not count here.
+
+**Too senior** means a title with a word such as senior, lead, head, director, principal or staff (words inside your own role name, as in "Chief of Staff", do not count), a level mark II, III or IV, or a posting asking for more years than you set.
+
+**Deal-breakers.** A track that refuses Coding removes posts naming 4 or more different coding terms (Python, Java, backend, "write code", and so on) or with Engineer, Developer or Programmer in the title. Posts naming 2–3 are kept, flagged and ranked lower, since many PM jobs say "SQL a plus". On 105 real PM-type postings (October 2026), 78% named 0–1 coding terms and 3% named 4 or more; on 644 engineering postings, 69% named 4 or more.
+
+## How results are ranked
+
+Results are grouped by track, and Rank restarts at 1 in each track. Inside a track, in this order:
+
+1. Experience: years stated and within your range, then an entry-level title with no years stated (Associate, Junior, Trainee, Graduate, "Product Manager I"), then not stated.
+2. Matched by role title before matched by skills.
+3. Not flagged by a deal-breaker before flagged.
+4. More of your priority skills.
+5. Pay inside your range, then pay not stated, then pay outside your range.
+6. Your preferred cities.
+7. A mention of a 10 to 6 shift.
+8. Higher Fit %, then newer.
 
 ## Reading the CSV
 
 | Column | Meaning |
 | --- | --- |
-| Rank / Track | Results are grouped by track (one per profile, such as pm and seo), best first inside each track. Rank restarts at 1 for each track. A job that fits two tracks appears once, in the track whose skills fit it better |
+| Rank / Track | Position inside the track (one per profile, such as pm and seo). A job that fits two tracks appears once, in the track whose direction it fits best |
+| Matched by | "role title", or "skills: ..." with the specific skills that earned the job its place |
 | Apply link | The exact page where you apply |
-| Posted / Date basis | The platform's date, or "first seen" when the platform gives none. First-seen dates start counting on your first run, so their real age is unknown |
-| Experience bucket | "Within your range": the posting states years that fit your setting. "Entry-level title (years not stated)": no years given, but the title says Associate, Junior, Trainee, Graduate or "I" (as in Product Manager I). "Not stated (review)": no years and no sign either way, so read it. Ranked in that order. Titles marked II, III or IV are removed as above entry level |
-| Priority skills | Your priority skills this job needs. More of them ranks higher |
-| Deal-breaker check | Empty, or a flag such as "mentions coding: sql, apis" when a post names 2–3 terms of a deal-breaker you set. Flagged jobs rank lower; posts naming 4 or more are removed |
-| Matched by | "role title", or "skills: ..." with the specific skills that earned a job its place when its title is not on your list. Title matches rank above skills matches |
-| Fit % | Share of the skills the job mentions that are on your profile. Built-in skills (`data/skills.json`) and your own skills (matched by their exact words) both count |
-| Missing skills | Skills the job mentions that are not on your profile |
-| Location match / Shift | Preferences only. They raise a job's rank and never remove it |
+| Posted / Date basis | The source's date; "first seen" when it gives none (counting starts on your first run); or the alert email's date |
+| Experience bucket | Within your range / Entry-level title (years not stated) / Not stated (review) |
+| Priority skills | Your priority skills this job needs |
+| Deal-breaker check | Empty, or a flag such as "mentions coding: sql, apis" |
+| Fit % | Share of the skills the job mentions that are on your profile |
+| Matched / Missing skills | Skills the job mentions that you have / do not have |
+| Location match / Shift | Preferences only: they raise a job's rank and never remove it |
+| Pay / Pay check | The stated pay, and how it compares with yours |
 | Company email / Founder X handle | Only what you typed into `companies.csv` |
+| Platform | Where the job came from (greenhouse, lever, ashby, himalayas, remoteok, linkedin) |
 
 ## Change your preferences
 
-Run `python -m jobfinder setup`. It asks a few questions in the terminal and saves your answers. Press Enter to keep the value in brackets. Typing `keep` or `yes` is not saved as a role or skill; press Enter instead.
+Run `python -m jobfinder setup` again. Press Enter to keep the value in brackets. Typing `keep` or `yes` is never saved as a role or skill; press Enter instead.
 
-| Question | Setting | Where it is saved |
+| Question | Setting | Saved in |
 | --- | --- | --- |
-| Your resume (optional on later runs). Read locally; the file is not copied and its path is not saved | `skills` | a profile file in `profiles/` |
-| Skills: the ones found in your resume, which you confirm or edit. Besides the built-in list, it picks up items from your resume's own skill lists (such as "Tools: Power BI, Tableau"), never your name, email, phone, cities or education | `skills` | each profile file in `profiles/` |
-| Categories this track searches, when your skills fit roles in more than one. The rest can become a separate track | — | a new profile file |
-| Roles: the ones that need 2 or more of your skills, which you confirm or edit | `titles` | each profile file in `profiles/` |
-| Deal-breakers: work this track's jobs must not depend on (Coding), or none | `deal_breakers` | each profile file |
-| Priority skills: what the jobs should mainly be about. Suggested from your roles, without deal-breaker skills | `priority_skills` | each profile file |
-| Cities | `preferred_locations`, `location_mode` | `settings.json` |
+| Cities you prefer; keep or remove jobs elsewhere | `preferred_locations`, `location_mode` | `settings.json` |
 | Most years of experience a job may ask for (`1`, or a range such as `0-1`) | `max_experience_years` | `settings.json` |
 | Posted within how many days | `freshness_days` | `settings.json` |
-| Pay you want, typed your own way, such as `8 LPA`, `more than 8 lakhs`, `6-12 LPA`, `up to 10 LPA` or `$80k` | `min_annual_pay`, `max_annual_pay`, `pay_currency`, `pay_mode` | `settings.json` |
+| Pay you want, typed your own way (`8 LPA`, `more than 8 lakhs`, `6-12 LPA`, `up to 10 LPA`, `$80k`), and keep or remove jobs outside it | `min_annual_pay`, `max_annual_pay`, `pay_currency`, `pay_mode` | `settings.json` |
+| Your resume (optional on later runs). Read locally; not copied, and its path is not saved | — | — |
+| Skills found in your resume, which you confirm or edit. Besides the built-in list, items from your resume's own skill lists (such as "Tools: Power BI, Tableau") are picked up; never your name, email, phone, cities or education | `skills` | `profiles/<name>.json` |
+| Categories this track searches, when your skills fit roles in more than one; the rest can become a separate track | — | a new profile |
+| Roles that need 2 or more of your skills, which you confirm or edit. Can be empty for a track that matches by skills only | `titles` | `profiles/<name>.json` |
+| Deal-breakers: work these jobs must not depend on (Coding), or none | `deal_breakers` | `profiles/<name>.json` |
+| Priority skills: what the jobs should mainly be about. Only skills that are also in your skills list count | `priority_skills` | `profiles/<name>.json` |
 
-Roles can be left empty for a track that should match by skills only. You can also edit these files by hand. Other settings: `exclude_title_words`, `request_delay_seconds`, `remote_country` (default India), `match_by` (`titles_or_skills`, or `titles` to keep only listed roles), `skill_match_min` (default 3) and `skill_match_share` (default 50). Backup copies named `*.backup.json` in `profiles/` are ignored.
+Other settings you can edit by hand in `settings.json`: `remote_country` (default India), `remote_sources` (`[]` turns the remote boards off), `starter_companies`, `match_by` (`titles_or_skills`, or `titles` to keep only listed roles), `skill_match_min` (3), `skill_match_share` (50), `deal_breaker_remove` (4), `deal_breaker_flag` (2), `exclude_title_words` and `request_delay_seconds`. Backup copies named `*.backup.json` in `profiles/` are ignored.
 
-**How pay works.** `setup` repeats back what it understood. In `prefer` mode, jobs whose stated pay is outside your range stay on the list but rank lower. In `require` mode they are removed. Jobs that do not state pay are always kept, because most postings do not. Pay is only compared when the posting uses your currency, and it is never converted. Monthly pay is multiplied by 12. Hourly pay, and bare numbers with no sign of a period, are treated as not comparable, because guessing would wrongly remove good jobs.
-
-## How results are ranked
-
-In this order: experience stated and within your range first, then pay inside your range, then your preferred cities, then a mention of a 10 to 6 shift, then the skill match. Jobs with no stated pay sit between jobs inside and outside your range.
-
-Every run starts by printing the roles each profile is looking for. If a profile has no roles, the run stops with a message instead of matching every title.
+**How pay works.** In `prefer` mode, jobs whose stated pay is outside your range stay on the list but rank lower; in `require` mode they are removed. Jobs that do not state pay are always kept, because most postings do not. Pay is compared only when the posting uses your currency, and it is never converted. Monthly pay is multiplied by 12. Hourly pay, and bare numbers with no sign of a period, are treated as not comparable.
 
 ## Privacy: what stays on your computer
 
-Never committed (see `.gitignore`): your resumes, your profiles, `settings.json`, `companies.csv`, `state.json` (the memory of seen and removed jobs) and everything in `output/`. Resumes are read locally and never uploaded.
+Never committed (see `.gitignore`): your resumes, `profiles/` (except `example.json`), `settings.json`, `companies.csv`, `state.json` (the memory of seen and removed jobs), `inbox/` (alert emails, which contain your name and email address), `cache/` and `output/`. Resumes and emails are read locally and never uploaded.
 
 ## Known limits
 
-- **Coverage.** Only companies on Greenhouse, Lever or Ashby can be read, and only the ones you list.
-- **Dates can mislead.** Greenhouse and Ashby dates can change when a company edits or reposts an old job, so a few stale jobs will look fresh.
-- **Skills matching is word matching.** It finds exact words, not ideas: "built dashboards" does not count as Power BI. Very short skills (Go, R, C++) are skipped because their letters match ordinary words. Add aliases in `data/skills.json` to help.
-- **Broad skills never keep a job by themselves.** Skills listed as `generic_skills` in `data/skills.json` (research, communication, Excel and similar) count for Fit % only. In a track with roles, a job kept for its skills must also need at least 2 specific skills those roles need, so a PM track does not pick up developer jobs because you know Python and SQL. Skills in `exact_case` (such as GEO) match only in capitals.
-- **Matching by skills is a wider net.** On real postings it mostly found sensible leads, but some are loose. If it brings in jobs you do not want, raise `skill_match_min`, or set `match_by` to `titles`.
+- **Coverage.** Company boards are read only for Greenhouse, Lever and Ashby, and only for companies on your lists. Many companies, especially in India, use other systems this agent cannot read.
+- **Dates can mislead.** Greenhouse dates change when a company edits a job, and alert emails have no posting date, so a few older jobs will look fresh.
+- **Matching is word matching.** It finds exact words, not ideas: "built dashboards" does not count as Power BI. Very short skills (Go, R, C++) are not picked up from resumes, because their letters match ordinary words. Add aliases in `data/skills.json` to help.
+- **Matching by skills is a wider net.** On real postings it mostly found sensible leads, but some are loose. Raise `skill_match_min`, or set `match_by` to `titles`.
 - **Experience reading is a guess from text.** Check the Experience column.
-- **Platform rules.** The platforms' API docs state no usage terms, but check their terms yourself, and keep the request delay.
-- **Not built yet:** finding companies automatically, and finding company emails and founder handles automatically.
+- **Check companies yourself** before applying, especially internships that ask for a fee.
+- **Source terms.** Himalayas and Remote OK ask for credit and links (kept automatically). For Greenhouse, Lever and Ashby, check their terms yourself and keep the request delay.
+- **Not built yet:** other alert-email senders (such as Naukri), extra cities listed on a job, and finding company emails or founder handles.
 
 ## Contributing
 
-- Add skills, aliases or role titles in `data/skills.json`. Give each role a `category` so setup can group it into a track.
-- Add a new job platform: copy `jobfinder/sources/lever.py`, return `Job` objects, and register it in `jobfinder/sources/__init__.py`.
-- Add tests with fake data only. Never commit real resumes or personal data.
+- Add skills, aliases or roles in `data/skills.json`. Give each role a `category` so setup can group it into a track.
+- Add a job platform: copy `jobfinder/sources/lever.py`, return `Job` objects, and register it in `jobfinder/sources/__init__.py`.
+- Add tests with fake data only, and keep them offline. Never commit real resumes, emails or personal data.
+
+## License
+
+Copyright 2026 Rithu Sadula. Licensed under the [Apache License, Version 2.0](LICENSE): you may use, change and share this code, including commercially, as long as you keep the license and copyright notice and say which files you changed. It comes with no warranty.
