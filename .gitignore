@@ -11,3 +11,6 @@ __pycache__/
 *.pyc
 .venv/
 .DS_Store
+
+# Saved job-alert emails (contain your name and email address)
+inbox/

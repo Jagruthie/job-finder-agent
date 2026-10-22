@@ -17,6 +17,7 @@ class Job:
     description: str = ""
     posted_at: Optional[datetime] = None   # None when the platform gives no date
     pay_text: str = ""
+    date_basis: str = ""   # what posted_at means when it is not the platform's own date
 
     @property
     def key(self) -> str:

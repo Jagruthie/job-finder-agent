@@ -66,6 +66,21 @@ The agent does not run web searches by itself, because search engines do not all
 
 You can also add a company by hand: `boards.greenhouse.io/acme` means platform `greenhouse`, board `acme`. `jobs.lever.co/acme` means `lever`. `jobs.ashbyhq.com/acme` means `ashby`.
 
+## Add jobs from job-alert emails (LinkedIn)
+
+Many jobs, especially at startups, agencies and large companies, are on job sites this agent cannot read. Set up free job alerts there, then let the agent screen what they send you.
+
+1. Create job alerts on LinkedIn for each track (for example "Associate Product Manager, Hyderabad" and "SEO Executive, Hyderabad").
+2. Save the alert emails as `.eml` files in the `inbox/` folder. In Gmail: open the email, then More (⋮) > **Download message**. Do not forward them; forwarding changes the layout.
+3. Run as usual: `python -m jobfinder run`. Jobs from the emails go through the same role, entry-level, location and freshness checks, are filed under the right track, and the same job in two emails appears once.
+
+Good to know:
+
+- **Only LinkedIn alert emails are understood so far.** Emails from other senders are listed as "not supported yet". Other sites (Naukri, Cutshort, Instahyre, Wellfound) need a sample email each before they can be added.
+- **Links are cleaned.** Alert links carry tracking codes and one-time login tokens. The agent keeps only the plain job address, such as `https://www.linkedin.com/jobs/view/123/`.
+- **Dates and skills are limited.** An alert email does not say when a job was posted, so the email's date is used (the job may be older). It also has no job description, so Fit % is usually empty for these jobs.
+- **Privacy.** `inbox/` is in `.gitignore`: these emails contain your name and email address and stay on your computer. Everything is read locally.
+
 ## Reading the CSV
 
 | Column | Meaning |

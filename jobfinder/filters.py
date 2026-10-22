@@ -72,9 +72,13 @@ def higher_level_title(job_title: str) -> bool:
     return bool(set(norm(job_title).split()) & _HIGHER_LEVELS)
 
 
-def has_excluded_word(job_title: str, words: List[str]) -> bool:
-    title_norm = norm(job_title)
-    return any(has_phrase(title_norm, norm(word)) for word in words)
+def has_excluded_word(job_title: str, words: List[str], role_phrases: List[str] = ()) -> bool:
+    """True if the title has a word such as 'senior' or 'staff'. Words inside the role you asked for
+    do not count, so 'Chief of Staff' is kept while 'Staff Engineer' and 'Senior Chief of Staff' are not."""
+    title_norm = f" {norm(job_title)} "
+    for phrase in sorted(role_phrases, key=len, reverse=True):
+        title_norm = title_norm.replace(f" {phrase} ", " | ")
+    return any(has_phrase(title_norm.strip(), norm(word)) for word in words)
 
 
 INDIA_PLACES = ["india", "bengaluru", "bangalore", "hyderabad", "mumbai", "delhi", "gurgaon", "gurugram", "noida",

@@ -141,7 +141,7 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
                 stats["already_dropped"] += 1
                 continue
 
-            posted, basis = job.posted_at, "platform date"
+            posted, basis = job.posted_at, job.date_basis or "platform date"
             if posted is None:
                 basis = "first seen (real age unknown)"
                 posted = parse_dt(first_seen.get(job.key)) or now
@@ -156,7 +156,8 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
             if not candidates:
                 stats["title_mismatch"] += 1
                 continue
-            if has_excluded_word(job.title, cfg["exclude_title_words"]) or higher_level_title(job.title):
+            role_phrases = [phrase for profile in candidates for phrase in profile["_phrases"]]
+            if has_excluded_word(job.title, cfg["exclude_title_words"], role_phrases) or higher_level_title(job.title):
                 stats["senior_title"] += 1
                 continue
 

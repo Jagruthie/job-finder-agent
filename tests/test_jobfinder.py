@@ -826,6 +826,16 @@ class DiscoveryTests(unittest.TestCase):
         self.assertIn("pip install certifi", str(caught.exception))
 
 
+class SeniorWordTests(unittest.TestCase):
+    def test_senior_words_inside_your_role_name_do_not_count(self):
+        words = ["senior", "staff", "head", "lead"]
+        roles = VOCAB.title_phrases("Chief of Staff")
+        self.assertFalse(filters.has_excluded_word("Chief of Staff (Growth, B2B SaaS)", words, roles))
+        self.assertTrue(filters.has_excluded_word("Senior Chief of Staff", words, roles))
+        self.assertTrue(filters.has_excluded_word("Staff Software Engineer", words, roles))
+        self.assertTrue(filters.has_excluded_word("Chief of Staff", words))          # no role given: old behaviour
+
+
 class RemoteLocationTests(unittest.TestCase):
     def test_remote_means_remote_in_your_country(self):
         wanted = ["Hyderabad", "Remote"]
@@ -863,6 +873,96 @@ class EntryLevelTests(unittest.TestCase):
         self.assertEqual([r["Apply link"][-1] for r in rows], ["3", "2", "5", "1"])
         self.assertEqual(rows[1]["Experience bucket"], "Entry-level title (years not stated)")
         self.assertEqual(stats["senior_title"], 1)
+
+
+def fake_linkedin_alert(path, sent="Wed, 21 Oct 2026 04:23:35 +0000", jobs=None, sender="LinkedIn <jobs-noreply@linkedin.com>"):
+    """Writes a FAKE LinkedIn alert email with the same layout as a real one. All names are invented."""
+    from email.message import EmailMessage
+    jobs = jobs or [("Founder's Office", "Kestrel Labs (fake)", "Hyderabad, Telangana, India", "1001", True),
+                    ("Associate Product Manager", "Orbit Fintech (fake)", "India", "1002", False),
+                    ("SEO Executive", "Inkwell Media (fake)", "Remote", "1003", True)]
+    token = "&otpToken=FAKE0TOKEN&trackingId=abc"
+    lines = ["Expand your search", "", "Recommendations based on your activity.", "  ", "", "SaaS jobs",
+             "https://www.linkedin.com/comm/jobs/search-results/?keywords=x" + token, "", "      "]
+    for title, company, location, job_id, apply_line in jobs:
+        lines += [title, company, location] + (["Apply with resume & profile"] if apply_line else [])
+        lines += [f"View job: https://www.linkedin.com/comm/jobs/view/{job_id}/?refId=r{token}", "",
+                  "---------------------------------------------------------", "  ", "      "]
+    lines += ["View all jobs: https://www.linkedin.com/comm/jobs/collections/?x=1" + token, "",
+              "This email was intended for A Fake Person (Student)", "Unsubscribe: https://www.linkedin.com/u" + token]
+    message = EmailMessage()
+    message["From"], message["Subject"], message["Date"] = sender, "Kestrel Labs is hiring", sent
+    message.set_content("\r\n".join(lines))
+    message.add_alternative("<html><body>fake</body></html>", subtype="html")
+    with open(path, "w") as handle:
+        handle.write(message.as_string())
+
+
+class AlertInboxTests(unittest.TestCase):
+    def test_linkedin_alert_jobs_are_read_with_clean_links(self):
+        from jobfinder.alerts import read_alerts
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_linkedin_alert(os.path.join(tmp, "a.eml"))
+            jobs, notes = read_alerts(tmp)
+        self.assertEqual(notes, [])
+        self.assertEqual([(j.title, j.company, j.location) for j in jobs],
+                         [("Founder's Office", "Kestrel Labs (fake)", "Hyderabad, Telangana, India"),
+                          ("Associate Product Manager", "Orbit Fintech (fake)", "India"),
+                          ("SEO Executive", "Inkwell Media (fake)", "Remote")])
+        self.assertEqual(jobs[0].url, "https://www.linkedin.com/jobs/view/1001/")
+        for job in jobs:                                          # no tracking or one-time login tokens kept
+            self.assertNotIn("?", job.url)
+            self.assertNotIn("otp", job.url.lower())
+        self.assertEqual(jobs[0].posted_at, datetime(2026, 10, 21, 4, 23, 35, tzinfo=timezone.utc))
+
+    def test_same_job_in_two_emails_appears_once_and_other_senders_are_reported(self):
+        from jobfinder.alerts import read_alerts
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_linkedin_alert(os.path.join(tmp, "a.eml"))
+            fake_linkedin_alert(os.path.join(tmp, "b.eml"), sent="Thu, 22 Oct 2026 04:00:00 +0000")
+            fake_linkedin_alert(os.path.join(tmp, "c.eml"), sender="Someone <alerts@example.com>")
+            jobs, notes = read_alerts(tmp)
+        self.assertEqual(len(jobs), 3)
+        self.assertTrue(all(j.posted_at.day == 22 for j in jobs))          # newest email wins
+        self.assertEqual(len(notes), 1)
+        self.assertIn("not supported yet", notes[0])
+
+    def test_run_includes_alert_jobs_per_track(self):
+        import contextlib
+        import io
+        from jobfinder.cli import main
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = os.path.join(tmp, "inbox")
+            os.makedirs(inbox)
+            sent = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%a, %d %b %Y %H:%M:%S +0000")
+            fake_linkedin_alert(os.path.join(inbox, "a.eml"), sent=sent)
+            folder = os.path.join(tmp, "profiles")
+            os.makedirs(folder)
+            for name, profile in (("pm", {**PM, "titles": PM["titles"] + ["Founder's Office"]}), ("seo", SEO)):
+                with open(os.path.join(folder, f"{name}.json"), "w") as handle:
+                    json.dump(profile, handle)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = main(["run", "--profiles-dir", folder, "--inbox", inbox,
+                             "--companies", os.path.join(tmp, "none.csv"), "--settings", os.path.join(tmp, "none.json"),
+                             "--state", os.path.join(tmp, "state.json"), "--out-dir", os.path.join(tmp, "out")])
+            self.assertEqual(code, 0)
+            with open(os.path.join(tmp, "out", os.listdir(os.path.join(tmp, "out"))[0]), encoding="utf-8-sig") as handle:
+                rows = list(csv.DictReader(handle))
+            tracks = {r["Role"]: r["Track"] for r in rows}
+            self.assertEqual(tracks, {"Founder's Office": "pm", "Associate Product Manager": "pm",
+                                      "SEO Executive": "seo"})
+            self.assertTrue(all(r["Date basis"].startswith("alert email date") for r in rows))
+            self.assertIn("Read 3 jobs from job-alert emails", out.getvalue())
+
+    def test_old_alert_email_jobs_count_as_stale(self):
+        from jobfinder.alerts import read_alerts
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_linkedin_alert(os.path.join(tmp, "a.eml"), sent="Wed, 01 Jan 2025 04:00:00 +0000")
+            jobs, _ = read_alerts(tmp)
+        rows, stats, _ = run_pipeline([{"name": "alerts", "platform": "alerts", "board": "inbox"}], [PM, SEO], {},
+                                      VOCAB, {"first_seen": {}, "dropped": {}}, lambda p, b, n: jobs, now=NOW)
+        self.assertEqual((len(rows), stats["stale_dropped"]), (0, 3))
 
 
 if __name__ == "__main__":

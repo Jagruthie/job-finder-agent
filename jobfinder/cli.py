@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
+from .alerts import read_alerts
 from .demo import demo_data
 from .discover import append_companies, check_board, extract_boards, known_boards
 from .pipeline import (DEFAULT_SETTINGS, ProfileError, clean_list, clean_locations, is_backup, load_state,
@@ -203,17 +204,27 @@ def cmd_run(args) -> int:
     profiles = load_profiles(profile_paths(args))
     if not profiles:
         return 1
-    companies = read_companies(args.companies)
+    companies = read_companies(args.companies) if Path(args.companies).exists() else []
+    alert_jobs, notes = read_alerts(args.inbox)
+    for note in notes:
+        print(f"(inbox) {note}")
+    if alert_jobs:
+        print(f"Read {len(alert_jobs)} jobs from job-alert emails in {args.inbox}/")
+        companies.append({"name": "Job-alert emails", "platform": "alerts", "board": args.inbox})
     if not companies:
-        print("No companies found. Add rows to companies.csv.")
+        print("No companies found and no job-alert emails. Add rows to companies.csv "
+              f"or save alert emails (.eml) in {args.inbox}/.")
         return 1
+
+    def fetch(platform: str, board: str, name: str):
+        return alert_jobs if platform == "alerts" else fetch_board(platform, board, name)
 
     state = load_state(args.state)
     now = datetime.now(timezone.utc)
     print_profiles(profiles)
     try:
         rows, stats, failures = run_pipeline(companies, profiles, settings, vocab, state,
-                                             fetch_board, now=now, sleep=time.sleep)
+                                             fetch, now=now, sleep=time.sleep)
     except ProfileError as error:
         print(f"\n{error}")
         return 1
@@ -262,6 +273,7 @@ def main(argv=None) -> int:
     p_run.add_argument("--companies", default="companies.csv")
     p_run.add_argument("--settings", default="settings.json")
     p_run.add_argument("--state", default="state.json")
+    p_run.add_argument("--inbox", default="inbox", help="folder of saved job-alert emails (.eml)")
     p_run.add_argument("--out-dir", default="output")
     p_run.set_defaults(func=cmd_run)
 
