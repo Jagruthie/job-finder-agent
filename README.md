@@ -203,4 +203,4 @@ Never committed (see `.gitignore`): your resumes, `profiles/` (except `example.j
 
 ## License
 
-Copyright 2026 Rithu Sadula. Licensed under the [Apache License, Version 2.0](LICENSE): you may use, change and share this code, including commercially, as long as you keep the license and copyright notice and say which files you changed. It comes with no warranty.
+Copyright 2026 Jagruthie Sadula. Licensed under the [Apache License, Version 2.0](LICENSE): you may use, change and share this code, including commercially, as long as you keep the license and copyright notice and say which files you changed. It comes with no warranty.
