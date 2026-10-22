@@ -1,6 +1,8 @@
-# Job Finder Agent
+# Freshlist
 
-Finds **fresh** jobs that fit your resume, and writes a CSV with the exact link to apply. You stay in charge: it never applies, sends or posts anything for you.
+**Freshlist** is an open-source job finder agent. It finds **fresh** jobs that fit your resume and writes a CSV with the exact link to apply. You stay in charge: it never applies, sends or posts anything for you.
+
+The repository is named `job-finder-agent`, and the command is `python -m jobfinder`.
 
 It reads public job lists (company boards on Greenhouse, Lever and Ashby, and the remote-job boards Himalayas and Remote OK), plus job-alert emails you save from LinkedIn. It does not scrape LinkedIn or any other site, uses no paid services, and keeps your resume and settings on your own computer.
 
