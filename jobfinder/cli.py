@@ -9,7 +9,7 @@ from typing import List
 
 from .demo import demo_data
 from .pipeline import (DEFAULT_SETTINGS, ProfileError, clean_list, clean_locations, is_backup, load_state,
-                       read_companies, run_pipeline, save_state, write_csv)
+                       profile_files, read_companies, run_pipeline, save_state, write_csv)
 from .resume import read_resume_text
 from .setup import run_setup
 from .sources import fetch_board
@@ -41,6 +41,18 @@ def load_profiles(paths: List[str]) -> List[dict]:
     return profiles
 
 
+def profile_paths(args) -> List[str]:
+    """The profiles named with --profiles, or else every profile in the profiles folder (one per track)."""
+    if args.profiles:
+        return args.profiles
+    paths = [str(f) for f in profile_files(args.profiles_dir)]
+    if paths:
+        print(f"Using every profile in {args.profiles_dir}/: {', '.join(Path(p).name for p in paths)}")
+    else:
+        print(f"No profiles found in {args.profiles_dir}/. Run 'python -m jobfinder setup' and give your resume.")
+    return paths
+
+
 def print_profiles(profiles: List[dict]) -> None:
     for profile in profiles:
         titles = clean_list(profile.get("titles", []))
@@ -48,7 +60,7 @@ def print_profiles(profiles: List[dict]) -> None:
               f"looking for roles: {', '.join(titles) if titles else '(none)'}")
 
 
-def print_summary(stats, failures, settings) -> None:
+def print_summary(stats, failures, settings, rows=(), profiles=()) -> None:
     print(f"\nCompanies read: {stats['boards_ok']} ok, {stats['boards_failed']} failed")
     for failure in failures:
         print(f"  - {failure}")
@@ -60,11 +72,22 @@ def print_summary(stats, failures, settings) -> None:
     print(f"  dropped for location: {stats['location_dropped']}")
     print(f"  dropped for pay outside your range: {stats['pay_dropped']}")
     print(f"Kept: {stats['kept']} (of which experience not stated: {stats['kept_experience_not_stated']})")
+    if len(profiles) > 1:
+        print("  per track: " + ", ".join(f"{p['name']} {sum(r['Track'] == p['name'] for r in rows)}"
+                                         for p in profiles))
 
 
-def print_preview(rows: List[dict]) -> None:
-    print("\nResults, best first:")
+def print_preview(rows: List[dict], profiles=()) -> None:
+    print("\nResults per track, best first:")
+    for profile in profiles:
+        if not any(row["Track"] == profile["name"] for row in rows):
+            print(f"\n=== Track '{profile['name']}': no jobs kept ===")
+    track = None
     for row in rows:
+        if row["Track"] != track:
+            track = row["Track"]
+            count = sum(r["Track"] == track for r in rows)
+            print(f"\n=== Track '{track}': {count} job{'s' if count != 1 else ''} ===")
         fit = f"{row['Fit %']}%" if row["Fit %"] != "" else "n/a"
         print(f"\n{row['Rank']}. {row['Role']} at {row['Company']}  [{row['Track']}, fit {fit}]")
         print(f"   {row['Location']} | posted {row['Posted']} ({row['Date basis']}) | experience: {row['Experience']}"
@@ -106,7 +129,9 @@ def cmd_demo(args) -> int:
     """Run the full pipeline on built-in FAKE jobs. Nothing is fetched and no memory is saved."""
     vocab = Vocab.load()
     settings = load_settings(args.settings)
-    profiles = load_profiles(args.profiles)
+    profiles = load_profiles(profile_paths(args))
+    if not profiles:
+        return 1
     now = datetime.now(timezone.utc)
     companies, jobs = demo_data(now)
     state = {"first_seen": {}, "dropped": {}}
@@ -121,8 +146,8 @@ def cmd_demo(args) -> int:
     out_path = Path(args.out_dir) / f"demo-{now.date().isoformat()}.csv"
     write_csv(rows, str(out_path))
     print("DEMO MODE: these jobs are fake. Nothing was fetched from the internet.")
-    print_summary(stats, failures, settings)
-    print_preview(rows)
+    print_summary(stats, failures, settings, rows, profiles)
+    print_preview(rows, profiles)
     print(f"\nWrote {out_path}")
     return 0
 
@@ -130,7 +155,9 @@ def cmd_demo(args) -> int:
 def cmd_run(args) -> int:
     vocab = Vocab.load()
     settings = load_settings(args.settings)
-    profiles = load_profiles(args.profiles)
+    profiles = load_profiles(profile_paths(args))
+    if not profiles:
+        return 1
     companies = read_companies(args.companies)
     if not companies:
         print("No companies found. Add rows to companies.csv.")
@@ -149,7 +176,7 @@ def cmd_run(args) -> int:
 
     out_path = Path(args.out_dir) / f"jobs-{now.date().isoformat()}.csv"
     write_csv(rows, str(out_path))
-    print_summary(stats, failures, settings)
+    print_summary(stats, failures, settings, rows, profiles)
     print(f"\nWrote {out_path}")
     return 0
 
@@ -170,13 +197,15 @@ def main(argv=None) -> int:
     p_setup.set_defaults(func=cmd_setup)
 
     p_demo = sub.add_parser("demo", help="try the whole flow on built-in fake jobs (no internet)")
-    p_demo.add_argument("--profiles", nargs="+", required=True)
+    p_demo.add_argument("--profiles", nargs="*", help="profile files; default: every profile in --profiles-dir")
+    p_demo.add_argument("--profiles-dir", default="profiles")
     p_demo.add_argument("--settings", default="settings.json")
     p_demo.add_argument("--out-dir", default="output")
     p_demo.set_defaults(func=cmd_demo)
 
     p_run = sub.add_parser("run", help="fetch jobs, filter them, and write a CSV")
-    p_run.add_argument("--profiles", nargs="+", required=True)
+    p_run.add_argument("--profiles", nargs="*", help="profile files; default: every profile in --profiles-dir")
+    p_run.add_argument("--profiles-dir", default="profiles")
     p_run.add_argument("--companies", default="companies.csv")
     p_run.add_argument("--settings", default="settings.json")
     p_run.add_argument("--state", default="state.json")

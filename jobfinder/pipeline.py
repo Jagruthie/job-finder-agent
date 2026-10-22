@@ -224,9 +224,13 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
             if bucket == NOT_STATED:
                 stats["kept_experience_not_stated"] += 1
 
-    rows.sort(key=lambda row: row["_sort"])
-    for rank, row in enumerate(rows, start=1):
-        row["Rank"] = rank
+    # Grouped by track (in the order the profiles were given), best first inside each track.
+    order = {profile["name"]: index for index, profile in enumerate(prepared)}
+    rows.sort(key=lambda row: (order[row["Track"]], row["_sort"]))
+    ranks: Counter = Counter()
+    for row in rows:
+        ranks[row["Track"]] += 1
+        row["Rank"] = ranks[row["Track"]]
         del row["_sort"]
     return rows, stats, failures
 

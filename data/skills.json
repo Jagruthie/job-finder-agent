@@ -1,5 +1,5 @@
 {
-  "_about": "Starter vocabulary. 'skills' maps a skill name to the words that mean it. 'titles' maps a role title to its other spellings and the skills that suggest it. Anyone can extend this file.",
+  "_about": "Starter vocabulary. 'skills' maps a skill name to the words that mean it. 'titles' maps a role title to its category (used to group roles into tracks, such as PM or SEO), its other spellings and the skills that suggest it. Anyone can extend this file.",
   "skills": {
     "Product Management": ["product management", "product manager", "product ownership", "product owner", "product builder", "pm equivalent", "product roadmap"],
     "Product Strategy": ["product strategy"],
@@ -57,50 +57,62 @@
   },
   "titles": {
     "Associate Product Manager": {
+      "category": "Product & Strategy",
       "aliases": ["apm", "associate pm", "junior product manager", "product management intern"],
       "skills": ["Product Management", "Product Strategy", "Roadmapping", "User Research", "Product Specs", "Agile", "Prioritization", "Metrics", "Zero-to-One", "Product Analytics"]
     },
     "Product Analyst": {
+      "category": "Product & Strategy",
       "aliases": ["product data analyst"],
       "skills": ["Product Analytics", "Data Analysis", "SQL", "Metrics", "A/B Testing", "Excel/Sheets"]
     },
     "Product Operations": {
+      "category": "Product & Strategy",
       "aliases": ["product ops"],
       "skills": ["Product Management", "Operations", "Agile", "Jira", "Documentation"]
     },
     "Founder's Office": {
+      "category": "Product & Strategy",
       "aliases": ["founders office", "founder office", "founders associate", "associate founders office", "founders office associate", "founders office intern"],
       "skills": ["Zero-to-One", "Strategy", "Operations", "Project Management", "Stakeholder Management", "Research", "Cross-functional Leadership", "Presentation", "Data Analysis", "Communication"]
     },
     "Chief of Staff": {
+      "category": "Product & Strategy",
       "aliases": ["associate chief of staff"],
       "skills": ["Strategy", "Operations", "Stakeholder Management", "Project Management", "Communication", "Presentation"]
     },
     "Strategy and Operations Associate": {
+      "category": "Product & Strategy",
       "aliases": ["strategy operations associate", "strategy and operations", "business operations associate", "business operations", "operations associate", "strategy associate"],
       "skills": ["Strategy", "Operations", "Data Analysis", "Excel/Sheets", "Project Management"]
     },
     "Business Analyst": {
+      "category": "Product & Strategy",
       "aliases": ["associate business analyst"],
       "skills": ["Data Analysis", "SQL", "Excel/Sheets", "Documentation", "Stakeholder Management"]
     },
     "SEO Executive": {
+      "category": "SEO & Content",
       "aliases": ["seo specialist", "seo associate", "seo analyst", "seo intern", "seo content"],
       "skills": ["SEO", "Keyword Research", "Content Strategy", "Google Search Console", "Ahrefs", "Semrush", "Link Building", "GEO"]
     },
     "GEO Specialist": {
+      "category": "SEO & Content",
       "aliases": ["aeo specialist", "geo specialist", "generative engine optimization"],
       "skills": ["GEO", "SEO", "Content Strategy"]
     },
     "Content Strategist": {
+      "category": "SEO & Content",
       "aliases": ["content marketing associate", "content marketing executive"],
       "skills": ["Content Strategy", "Content Writing", "SEO", "Audience Research", "Writing", "Social Media"]
     },
     "Content Writer": {
+      "category": "SEO & Content",
       "aliases": ["copywriter", "content associate", "content executive", "content marketer"],
       "skills": ["Content Writing", "Writing", "SEO", "Social Media"]
     },
     "Growth Associate": {
+      "category": "Growth & Marketing",
       "aliases": ["growth executive", "growth marketing associate", "growth intern"],
       "skills": ["Cold Outreach", "Social Media", "Metrics", "Content Strategy", "Go-to-Market"]
     }

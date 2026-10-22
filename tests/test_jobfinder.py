@@ -237,9 +237,10 @@ class PipelineTests(unittest.TestCase):
 
     def test_stated_experience_ranks_above_not_stated(self):
         rows, _, _, _ = self.run_once()
-        buckets = [r["Experience bucket"] for r in rows]
-        first_unstated = buckets.index("Not stated (review)")
-        self.assertTrue(all(b == "Within your range" for b in buckets[:first_unstated]))
+        for track in ("pm", "seo"):                                     # ranking applies inside each track
+            buckets = [r["Experience bucket"] for r in rows if r["Track"] == track]
+            stated = [b == "Within your range" for b in buckets]
+            self.assertEqual(stated, sorted(stated, reverse=True), track)
 
     def test_track_choice_and_reasons(self):
         rows, _, _, _ = self.run_once()
@@ -325,7 +326,9 @@ class PayTests(unittest.TestCase):
         self.assertEqual(apm["Pay check"], "Below your range")           # Rs 25,000 per month = 300,000 a year
         seo = next(r for r in rows if r["Role"] == "SEO Specialist")
         self.assertEqual(seo["Pay check"], "Within your range")           # top of range 500,000
-        self.assertLess(rows.index(seo), rows.index(apm))
+        ops = next(r for r in rows if r["Role"] == "Business Operations Associate")
+        self.assertEqual((ops["Track"], ops["Pay check"]), ("pm", "Within your range"))   # 6L to 9L
+        self.assertLess(ops["Rank"], apm["Rank"])                          # same track: within pay ranks first
 
     def test_require_mode_drops_only_known_low_pay(self):
         rows, stats = self.run_with(min_annual_pay=400000, pay_mode="require")
@@ -491,9 +494,10 @@ class SafetyTests(unittest.TestCase):
         state = {"first_seen": {}, "dropped": {}}
         rows, _, _ = run_pipeline(COMPANIES, [PM, SEO], {"min_annual_pay": 450000, "pay_mode": "prefer"},
                                   VOCAB, state, fake_fetch, now=NOW)
-        stated = [r for r in rows if r["Experience bucket"] == "Within your range"]
-        tiers = [r["Pay check"] for r in stated]
-        self.assertEqual(tiers, sorted(tiers, key=lambda t: {"Within your range": 0}.get(t, 1 if "Not stated" in t else 2)))
+        for track in ("pm", "seo"):                                     # ranking applies inside each track
+            stated = [r for r in rows if r["Experience bucket"] == "Within your range" and r["Track"] == track]
+            tiers = [r["Pay check"] for r in stated]
+            self.assertEqual(tiers, sorted(tiers, key=lambda t: {"Within your range": 0}.get(t, 1 if "Not stated" in t else 2)))
 
 
 class PayPreferenceTests(unittest.TestCase):
@@ -689,6 +693,84 @@ class ResumeInSetupTests(unittest.TestCase):
             with open(path) as handle:
                 saved = json.load(handle)
             self.assertEqual((saved["max_experience_years"], saved["freshness_days"]), (1, 7))
+
+
+class TwoTrackTests(unittest.TestCase):
+    """One person, two interests (PM and SEO): each profile is a track with its own roles."""
+
+    def test_results_are_grouped_and_ranked_per_track(self):
+        rows, _, _ = run_pipeline(COMPANIES, [PM, SEO], {}, VOCAB, {"first_seen": {}, "dropped": {}},
+                                  fake_fetch, now=NOW)
+        tracks = [r["Track"] for r in rows]
+        self.assertEqual(tracks, sorted(tracks, key=["pm", "seo"].index))     # all pm, then all seo
+        for track in ("pm", "seo"):
+            self.assertEqual([r["Rank"] for r in rows if r["Track"] == track],
+                             list(range(1, tracks.count(track) + 1)))
+
+    def test_roles_are_grouped_by_category(self):
+        groups = dict(VOCAB.role_groups(["SEO", "Keyword Research", "Ahrefs", "Content Strategy",
+                                         "Product Management", "Roadmapping", "Agile", "User Research"]))
+        self.assertIn("SEO Executive", [t for t, _, _ in groups["SEO & Content"]])
+        self.assertIn("Associate Product Manager", [t for t, _, _ in groups["Product & Strategy"]])
+        for title in VOCAB.titles:                                             # every role has a category
+            self.assertNotEqual(VOCAB.category(title), "Other", title)
+
+    def test_one_resume_with_two_interests_makes_two_tracks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            resume = os.path.join(tmp, "resume.txt")
+            with open(resume, "w") as handle:
+                handle.write("Product management, roadmap, agile sprints, user research, product specs. "
+                             "Also SEO, keyword research, Ahrefs, Semrush and content strategy.")
+            folder = os.path.join(tmp, "profiles")
+            with open(resume) as handle:
+                categories = [c for c, _ in VOCAB.role_groups(VOCAB.extract_skills(handle.read()))]
+            said = []
+            queue = ["", "", "", "", "none",
+                     resume, "pm", "",          # one resume, profile 'pm', no more resumes
+                     "",                        # Enter accepts the skills
+                     str(categories.index("Product & Strategy") + 1),   # pm searches Product & Strategy only
+                     "seo",                     # the other category becomes track 'seo'
+                     "",                        # Enter accepts pm's roles
+                     ""]                        # Enter accepts seo's roles
+            run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=said.append,
+                      ask=lambda prompt: queue.pop(0))
+            with open(os.path.join(folder, "pm.json")) as handle:
+                pm = json.load(handle)
+            with open(os.path.join(folder, "seo.json")) as handle:
+                seo = json.load(handle)
+            self.assertEqual(pm["skills"], seo["skills"])
+            self.assertTrue(all(VOCAB.category(t) == "Product & Strategy" for t in pm["titles"]))
+            self.assertIn("SEO Executive", seo["titles"])
+            self.assertNotIn("Associate Product Manager", seo["titles"])
+            self.assertTrue(any(". Product & Strategy" in line for line in said))
+
+    def test_bad_category_answer_is_asked_again(self):
+        said = []
+        queue = ["keep", "9", "2"]
+        from jobfinder.setup import _ask_categories
+        groups = VOCAB.role_groups(["SEO", "Keyword Research", "Product Management", "Roadmapping"])
+        chosen = _ask_categories(lambda p: queue.pop(0), said.append, "x", groups)
+        self.assertEqual(chosen, [groups[1][0]])
+        self.assertTrue(any("press Enter" in line for line in said))
+
+    def test_run_uses_every_profile_by_default(self):
+        import contextlib
+        import io
+        from jobfinder.cli import main
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = os.path.join(tmp, "profiles")
+            os.makedirs(folder)
+            for name, profile in (("pm", PM), ("seo", SEO), ("seo.backup", SEO), ("example", SEO)):
+                with open(os.path.join(folder, f"{name}.json"), "w") as handle:
+                    json.dump(profile, handle)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = main(["demo", "--profiles-dir", folder, "--settings", os.path.join(tmp, "none.json"),
+                             "--out-dir", os.path.join(tmp, "out")])
+            self.assertEqual(code, 0)
+            self.assertIn("Using every profile", out.getvalue())
+            self.assertIn("per track: pm", out.getvalue())
+            self.assertIn("=== Track 'seo'", out.getvalue())
 
 
 if __name__ == "__main__":

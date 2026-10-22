@@ -46,7 +46,19 @@ class Vocab:
     def suggest_titles(self, skills: List[str], limit: int = 6) -> List[str]:
         return [title for title, _, _ in self.role_matches(skills, limit)]
 
-    def role_matches(self, skills: List[str], limit: int = 6) -> List[Tuple[str, List[str], List[str]]]:
+    def category(self, title: str) -> str:
+        """The group a role belongs to, such as 'Product & Strategy' or 'SEO & Content'."""
+        return self.titles.get(title, {}).get("category", "Other")
+
+    def role_groups(self, skills: List[str]) -> List[Tuple[str, List[Tuple[str, List[str], List[str]]]]]:
+        """Every role that needs 2 or more of these skills, grouped by category.
+        The group holding the best-matching role comes first."""
+        groups: Dict[str, list] = {}
+        for match in self.role_matches(skills, limit=None):
+            groups.setdefault(self.category(match[0]), []).append(match)
+        return list(groups.items())
+
+    def role_matches(self, skills: List[str], limit: Optional[int] = 6) -> List[Tuple[str, List[str], List[str]]]:
         """Roles whose needed skills overlap yours (2 or more), best first, as
         (title, your skills it needs, all skills it needs). These are the reasons shown to the user."""
         have = set(skills)

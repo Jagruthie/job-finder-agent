@@ -9,7 +9,8 @@ It reads only public job lists that Greenhouse, Lever and Ashby publish for comp
 ## What it does
 
 1. Asks for your resume and reads it on your own computer. It lists the skills it finds.
-2. **You confirm or edit those skills.** Then it lists the roles that need those skills, with the reasons, and you confirm the roles. This is the confirm step.
+2. **You confirm or edit those skills.** Then it lists the roles that need those skills, grouped by category (for example Product & Strategy, SEO & Content), with the reasons. You pick the categories and confirm the roles. This is the confirm step.
+   - **Two interests?** Each profile is one *track*. Give two resumes (for example `pm` and `seo`), or give one resume and split the other category into its own track when setup offers it.
 3. Fetches open jobs for the companies in your `companies.csv`.
 4. Removes jobs older than 7 days and remembers them, so they never return as new.
 5. Keeps only the roles you want, asking for 0 to 1 years of experience (jobs that do not state it go in a review bucket).
@@ -19,10 +20,10 @@ It reads only public job lists that Greenhouse, Lever and Ashby publish for comp
 ## Try it first on fake jobs
 
 ```bash
-python -m jobfinder demo --profiles profiles/pm.json profiles/seo.json
+python -m jobfinder demo
 ```
 
-This runs your real profiles against 12 invented jobs built to trigger each rule (fresh, stale, too senior, experience not stated). Nothing is fetched and no memory is saved. It writes `output/demo-<date>.csv`.
+This runs every profile in `profiles/` (or the ones you name with `--profiles`) against 12 invented jobs built to trigger each rule (fresh, stale, too senior, experience not stated). Nothing is fetched and no memory is saved. It writes `output/demo-<date>.csv`.
 
 ## Quick start
 
@@ -38,7 +39,7 @@ python -m jobfinder setup
 cp companies.example.csv companies.csv
 
 # 3. Run it (daily is a good rhythm)
-python -m jobfinder run --profiles profiles/pm.json profiles/seo.json
+python -m jobfinder run          # every profile in profiles/, one track each
 ```
 
 On Windows, use `copy` instead of `cp`.
@@ -49,6 +50,7 @@ To add a company, open its careers page and look at the link. `boards.greenhouse
 
 | Column | Meaning |
 | --- | --- |
+| Rank / Track | Results are grouped by track (one per profile, such as pm and seo), best first inside each track. Rank restarts at 1 for each track. A job that fits two tracks appears once, in the track whose skills fit it better |
 | Apply link | The exact page where you apply |
 | Posted / Date basis | The platform's date, or "first seen" when the platform gives none. First-seen dates start counting on your first run, so their real age is unknown |
 | Experience bucket | "Within your range" means the posting states a number that fits your setting. "Not stated (review)" means the posting gave no number, so read it |
@@ -65,6 +67,7 @@ Run `python -m jobfinder setup`. It asks a few questions in the terminal and sav
 | --- | --- | --- |
 | Your resume (optional on later runs). Read locally; the file is not copied and its path is not saved | `skills` | a profile file in `profiles/` |
 | Skills: the ones found in your resume, which you confirm or edit | `skills` | each profile file in `profiles/` |
+| Categories this track searches, when your skills fit roles in more than one. The rest can become a separate track | — | a new profile file |
 | Roles: the ones that need 2 or more of your skills, which you confirm or edit | `titles` | each profile file in `profiles/` |
 | Cities | `preferred_locations`, `location_mode` | `settings.json` |
 | Most years of experience a job may ask for (`1`, or a range such as `0-1`) | `max_experience_years` | `settings.json` |
@@ -96,6 +99,6 @@ Never committed (see `.gitignore`): your resumes, your profiles, `settings.json`
 
 ## Contributing
 
-- Add skills, aliases or role titles in `data/skills.json`.
+- Add skills, aliases or role titles in `data/skills.json`. Give each role a `category` so setup can group it into a track.
 - Add a new job platform: copy `jobfinder/sources/lever.py`, return `Job` objects, and register it in `jobfinder/sources/__init__.py`.
 - Add tests with fake data only. Never commit real resumes or personal data.
