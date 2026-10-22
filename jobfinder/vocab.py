@@ -23,8 +23,12 @@ class Vocab:
     def __init__(self, data: dict):
         self.skills: Dict[str, List[str]] = data.get("skills", {})
         self.titles: Dict[str, dict] = data.get("titles", {})
+        self.generic: set = set(data.get("generic_skills", []))
+        self.exact_case: set = set(data.get("exact_case", []))
+        # An exact-case skill's name is matched separately, in capitals only ('GEO' in a post, not 'geo').
         self._skill_phrases = {
-            name: sorted({norm(name), *[norm(a) for a in aliases]} - {""})
+            name: sorted(({norm(name)} - ({norm(name)} if name in self.exact_case else set()))
+                         | {norm(a) for a in aliases} - {""})
             for name, aliases in self.skills.items()
         }
 
@@ -41,6 +45,10 @@ class Vocab:
         """
         text_norm = norm(text)
         counts: Dict[str, int] = {}
+        for name in self.exact_case:
+            found = len(re.findall(rf"(?<![A-Za-z]){re.escape(name)}(?![A-Za-z])", text or ""))
+            if found:
+                counts[name] = found
         by_length = sorted(((phrase, name) for name, phrases in self._skill_phrases.items() for phrase in phrases),
                            key=lambda pair: (-len(pair[0]), pair[0]))
         for phrase, name in by_length:

@@ -21,6 +21,8 @@ DEFAULT_SETTINGS = {
     "preferred_locations": ["Hyderabad", "Remote"],
     "location_mode": "prefer",          # "prefer" ranks higher, "require" drops other places
     "remote_country": "India",          # "Remote" in your cities means remote in this country (empty: anywhere)
+    "remote_sources": ["himalayas", "remoteok"],   # searched when "Remote" is one of your cities; [] turns them off
+    "starter_companies": True,          # also read data/companies-starter.csv (companies checked to hire in India)
     "pay_currency": "INR",              # INR or USD; pay in another currency is never compared
     "min_annual_pay": None,             # full yearly amount, e.g. 300000 for 3 LPA. None means no minimum
     "max_annual_pay": None,             # optional upper end of your range. None means no maximum
@@ -109,7 +111,12 @@ def prepare_profile(profile: dict, vocab: Vocab) -> dict:
     skills = clean_list(profile.get("skills", []))
     # Skills you confirmed that are not in data/skills.json are matched by their own words in the job text.
     own = [(skill, norm(skill)) for skill in skills if skill not in vocab.skills and len(norm(skill)) >= 3]
-    return {**profile, "_phrases": sorted(set(phrases)), "_skills": set(skills), "_own_skills": own}
+    # The specific skills your chosen roles need (from data/skills.json, without broad ones such as Research).
+    # A job kept for its skills alone must need 2 of these, so a PM track does not pick up developer jobs
+    # just because you know Python and SQL.
+    core = {s for title in clean_list(profile.get("titles", [])) for s in vocab.titles.get(title, {}).get("skills", [])}
+    return {**profile, "_phrases": sorted(set(phrases)), "_skills": set(skills), "_own_skills": own,
+            "_core": (core & set(skills)) - vocab.generic}
 
 
 def common_skills(found_per_job: List[List[str]], share: float = 0.2, minimum_jobs: int = 20) -> set:
@@ -195,11 +202,12 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
         matched_by = "role title"
         if not candidates and by_skills:
             # Skills in the company's own name (Git at GitLab) say nothing about the job either.
-            ignore = common | vocab.skills_in_name(job.company)
+            ignore = common | vocab.skills_in_name(job.company) | vocab.generic
             specific = {}
             for profile in prepared:
                 matched, _, pct = skill_fit(profile, found, text_norm, ignore)
-                if len(matched) >= cfg["skill_match_min"] and (pct or 0) >= cfg["skill_match_share"]:
+                on_track = not profile["_core"] or len(profile["_core"] & set(matched)) >= 2
+                if len(matched) >= cfg["skill_match_min"] and (pct or 0) >= cfg["skill_match_share"] and on_track:
                     candidates.append(profile)
                     specific[profile["name"]] = matched
             matched_by = "skills"

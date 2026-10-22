@@ -9,13 +9,20 @@ from typing import List
 
 from .alerts import read_alerts
 from .demo import demo_data
-from .discover import append_companies, check_board, extract_boards, known_boards
+from .discover import (YC_HIRING, append_companies, check_board, extract_boards, find_board, known_boards,
+                       yc_candidates)
+from .filters import INDIA_PLACES
 from .pipeline import (DEFAULT_SETTINGS, ProfileError, clean_list, clean_locations, is_backup, load_state,
                        profile_files, read_companies, run_pipeline, save_state, write_csv)
 from .resume import read_resume_text
 from .setup import run_setup
-from .sources import fetch_board
+from .sources import SourceError, fetch_board, http_get_json
+from .sources.remote import SOURCES as REMOTE_SOURCES, fetch_remote
+from .textutil import norm
 from .vocab import Vocab
+
+
+STARTER_COMPANIES = Path(__file__).resolve().parent.parent / "data" / "companies-starter.csv"
 
 
 def load_settings(path: str) -> dict:
@@ -145,6 +152,60 @@ def cmd_add(args) -> int:
     return 0
 
 
+def _confirm_and_add(args, results: List[dict]) -> int:
+    """Add the companies with jobs in your country (or remote in it), after asking."""
+    wanted = [r for r in results if r["ok"] and (r["in_india"] or (args.all and r["jobs"]))]
+    if not wanted:
+        print("\nNone of these has open jobs in India or remote-India, so nothing was added.")
+        return 0
+    print(f"\nTo add ({len(wanted)}): {', '.join(r.get('name') or r['board'] for r in wanted)}")
+    answer = "yes" if args.yes else input(f"Add these {len(wanted)} to {args.companies}? (yes or no) [yes]: ")
+    if answer.strip().lower() not in ("", "y", "yes"):
+        print("Nothing was added.")
+        return 0
+    append_companies(args.companies, wanted)
+    print(f"Added {len(wanted)} companies to {args.companies}. Every run now reads them and applies your filters.")
+    return 0
+
+
+def cmd_discover(args) -> int:
+    """Find companies to watch from Y Combinator's list of hiring companies."""
+    settings = load_settings(args.settings)
+    places = settings["preferred_locations"] + (INDIA_PLACES if norm(settings["remote_country"]) == "india" else [])
+    places = [p for p in places if norm(p) != "remote"] + (["remote"] if args.remote else [])
+    print("Reading Y Combinator's list of hiring companies (unofficial daily copy, read on this computer only)...")
+    try:
+        companies = http_get_json(YC_HIRING, timeout=60)
+    except SourceError as error:
+        print(f"Could not read the list: {error}")
+        return 1
+    candidates = yc_candidates(companies, places)
+    known = known_boards(args.companies)
+    print(f"{len(companies)} YC companies are hiring; {len(candidates)} list "
+          f"{'your places or remote' if args.remote else 'your places'}. Looking for their job boards...")
+    if args.limit:
+        candidates = candidates[:args.limit]
+    results = []
+    for index, company in enumerate(candidates):
+        if index:
+            time.sleep(0.4)
+        result = find_board(company, lambda platform, board: check_board(
+            platform, board, settings["preferred_locations"], fetch_board, settings["remote_country"]), time.sleep)
+        if result["ok"] and (result["platform"], result["board"]) in known:
+            print(f"  {result['name']}: already on your list")
+            continue
+        results.append(result)
+        if result["ok"]:
+            print(f"  {result['name']} ({result['platform']}/{result['board']}): {result['jobs']} jobs, "
+                  f"{result['in_your_cities']} in your cities, {result['in_india']} in India or remote")
+        else:
+            print(f"  {result['name']}: {result['error']}")
+    found = sum(r["ok"] for r in results)
+    print(f"\nFound job boards for {found} of {len(results)} companies. "
+          "The rest post jobs somewhere this agent cannot read.")
+    return _confirm_and_add(args, results)
+
+
 def cmd_setup(args) -> int:
     run_setup(args.settings, args.profiles_dir, Vocab.load())
     return 0
@@ -206,22 +267,37 @@ def cmd_run(args) -> int:
     if not profiles:
         return 1
     companies = read_companies(args.companies) if Path(args.companies).exists() else []
+    if settings["starter_companies"] and STARTER_COMPANIES.exists():
+        own = {(c["platform"].lower(), c["board"].lower()) for c in companies}
+        companies += [c for c in read_companies(str(STARTER_COMPANIES))
+                      if (c["platform"].lower(), c["board"].lower()) not in own]
     alert_jobs, notes = read_alerts(args.inbox)
     for note in notes:
         print(f"(inbox) {note}")
     if alert_jobs:
         print(f"Read {len(alert_jobs)} jobs from job-alert emails in {args.inbox}/")
         companies.append({"name": "Job-alert emails", "platform": "alerts", "board": args.inbox})
+    wants_remote = any(norm(place) == "remote" for place in settings["preferred_locations"])
+    remote = [s for s in settings["remote_sources"] if s in REMOTE_SOURCES] if wants_remote else []
+    for source in remote:
+        companies.append({"name": f"{source} (remote jobs)", "platform": source, "board": "remote"})
+    if remote:
+        print(f"Searching remote jobs open to {settings['remote_country'] or 'anyone'} on: {', '.join(remote)}")
     if not companies:
         print("No companies found and no job-alert emails. Add rows to companies.csv "
               f"or save alert emails (.eml) in {args.inbox}/.")
         return 1
 
-    def fetch(platform: str, board: str, name: str):
-        return alert_jobs if platform == "alerts" else fetch_board(platform, board, name)
-
     state = load_state(args.state)
     now = datetime.now(timezone.utc)
+
+    def fetch(platform: str, board: str, name: str):
+        if platform == "alerts":
+            return alert_jobs
+        if platform in REMOTE_SOURCES:
+            return fetch_remote(platform, settings, now, http_get_json, time.sleep, args.cache)
+        return fetch_board(platform, board, name)
+
     print_profiles(profiles)
     try:
         rows, stats, failures = run_pipeline(companies, profiles, settings, vocab, state,
@@ -256,6 +332,16 @@ def main(argv=None) -> int:
     p_add.add_argument("--yes", action="store_true", help="add without asking")
     p_add.set_defaults(func=cmd_add)
 
+    p_disc = sub.add_parser("discover", help="find companies to watch from Y Combinator's hiring companies")
+    p_disc.add_argument("source", choices=["yc"])
+    p_disc.add_argument("--remote", action="store_true", help="also YC companies that hire remotely (slower)")
+    p_disc.add_argument("--limit", type=int, default=0, help="check at most this many companies")
+    p_disc.add_argument("--companies", default="companies.csv")
+    p_disc.add_argument("--settings", default="settings.json")
+    p_disc.add_argument("--all", action="store_true", help="also add companies with no jobs in India")
+    p_disc.add_argument("--yes", action="store_true", help="add without asking")
+    p_disc.set_defaults(func=cmd_discover)
+
     p_setup = sub.add_parser("setup", help="answer a few questions to set roles, location, experience and pay")
     p_setup.add_argument("--settings", default="settings.json")
     p_setup.add_argument("--profiles-dir", default="profiles")
@@ -275,6 +361,7 @@ def main(argv=None) -> int:
     p_run.add_argument("--settings", default="settings.json")
     p_run.add_argument("--state", default="state.json")
     p_run.add_argument("--inbox", default="inbox", help="folder of saved job-alert emails (.eml)")
+    p_run.add_argument("--cache", default="cache", help="folder for today's copy of the remote-job feeds")
     p_run.add_argument("--out-dir", default="output")
     p_run.set_defaults(func=cmd_run)
 

@@ -941,10 +941,13 @@ class AlertInboxTests(unittest.TestCase):
             for name, profile in (("pm", {**PM, "titles": PM["titles"] + ["Founder's Office"]}), ("seo", SEO)):
                 with open(os.path.join(folder, f"{name}.json"), "w") as handle:
                     json.dump(profile, handle)
+            settings = os.path.join(tmp, "settings.json")
+            with open(settings, "w") as handle:
+                json.dump({"remote_sources": [], "starter_companies": False}, handle)   # tests never use the internet
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 code = main(["run", "--profiles-dir", folder, "--inbox", inbox,
-                             "--companies", os.path.join(tmp, "none.csv"), "--settings", os.path.join(tmp, "none.json"),
+                             "--companies", os.path.join(tmp, "none.csv"), "--settings", settings,
                              "--state", os.path.join(tmp, "state.json"), "--out-dir", os.path.join(tmp, "out")])
             self.assertEqual(code, 0)
             with open(os.path.join(tmp, "out", os.listdir(os.path.join(tmp, "out"))[0]), encoding="utf-8-sig") as handle:
@@ -997,14 +1000,27 @@ class SkillsFirstTests(unittest.TestCase):
         self.assertEqual(stats["kept_by_skills"], 1)
 
     def test_titles_only_mode_and_title_matches_rank_first(self):
-        profile = {"name": "pm", "skills": ["SQL", "Python", "Power BI", "Tableau"], "titles": ["Business Analyst"]}
-        text = "0-1 years. SQL, Python, Power BI, Tableau."
+        profile = {"name": "pm", "skills": ["SQL", "Data Analysis", "Power BI", "Tableau"], "titles": ["Business Analyst"]}
+        text = "0-1 years. SQL, data analysis, Power BI, Tableau."
         jobs = [self.job("1", "Insights Associate", text), self.job("2", "Business Analyst", text)]
         rows, _, _ = self.run_jobs(jobs, [profile])
         self.assertEqual([(r["Apply link"][-1], r["Matched by"]) for r in rows],
-                         [("2", "role title"), ("1", "skills: Python, SQL, Power BI, Tableau")])
+                         [("2", "role title"), ("1", "skills: Data Analysis, SQL, Power BI, Tableau")])
         rows, _, _ = self.run_jobs(jobs, [profile], match_by="titles")
         self.assertEqual([r["Apply link"][-1] for r in rows], ["2"])
+
+    def test_a_track_with_roles_keeps_only_jobs_needing_its_role_skills(self):
+        pm = {"name": "pm", "skills": ["Product Management", "Roadmapping", "User Research", "Python", "SQL", "Git/GitHub",
+                                       "Research", "Presentation"], "titles": ["Associate Product Manager"]}
+        rows, _, _ = self.run_jobs([
+            self.job("1", "Backend Developer", "0-1 years. Python, SQL and Git."),                     # developer job
+            self.job("2", "Research Associate", "0-1 years. Research, presentation, Python, SQL."),  # broad skills
+            self.job("3", "Growth Generalist", "0-1 years. Product roadmap, user research, SQL.")], [pm])
+        self.assertEqual([r["Apply link"][-1] for r in rows], ["3"])
+
+    def test_geo_matches_only_in_capitals(self):
+        self.assertEqual(VOCAB.extract_skills("geo-distributed systems"), [])
+        self.assertEqual(VOCAB.extract_skills("GEO and AI overviews"), ["GEO"])
 
     def test_boilerplate_and_company_name_skills_do_not_count(self):
         profile = {"name": "pm", "skills": ["Communication", "Documentation", "Presentation", "Git/GitHub", "SQL"],
@@ -1038,6 +1054,91 @@ class SkillsFirstTests(unittest.TestCase):
             self.assertEqual(saved["skills"], ["Kubernetes", "Terraform", "Ansible", "Prometheus", "Grafana"])
             self.assertEqual(saved["titles"], [])
             self.assertTrue(any("leave them empty" in line for line in said))
+
+
+class RemoteSourceTests(unittest.TestCase):
+    """Himalayas and Remote OK, with fake feed data (no internet)."""
+
+    def himalayas_feed(self, url):
+        self.urls.append(url)
+        if "page=1" not in url:
+            return {"jobs": []}
+        stamp = lambda days: int((NOW - timedelta(days=days)).timestamp())
+        return {"jobs": [
+            {"guid": "https://himalayas.app/companies/kite/jobs/apm", "title": "Associate Product Manager",
+             "companyName": "Kite (fake)", "locationRestrictions": ["India"], "pubDate": stamp(1),
+             "applicationLink": "https://himalayas.app/companies/kite/jobs/apm?utm_source=api",
+             "description": "<p>0-1 years. Roadmap, SQL.</p>", "minSalary": 600000, "maxSalary": 900000,
+             "currency": "INR", "salaryPeriod": "year"},
+            {"guid": "https://himalayas.app/companies/orbit/jobs/seo", "title": "SEO Executive",
+             "companyName": "Orbit (fake)", "locationRestrictions": [], "pubDate": stamp(2),
+             "applicationLink": "https://himalayas.app/companies/orbit/jobs/seo?utm_source=api", "description": "SEO."},
+            {"guid": "https://himalayas.app/companies/old/jobs/x", "title": "SEO Executive", "companyName": "Old",
+             "pubDate": stamp(30), "expiryDate": stamp(1), "applicationLink": "https://himalayas.app/x"}]}
+
+    def setUp(self):
+        self.urls = []
+
+    def test_himalayas_keeps_links_and_marks_who_can_apply(self):
+        from jobfinder.sources.remote import fetch_himalayas
+        jobs = fetch_himalayas(self.himalayas_feed, "India", 7, NOW, lambda s: None)
+        self.assertIn("country=India", self.urls[0])
+        self.assertEqual([(j.title, j.location) for j in jobs],
+                         [("Associate Product Manager", "Remote (open to India)"), ("SEO Executive", "Remote (worldwide)")])
+        self.assertTrue(jobs[0].url.endswith("?utm_source=api"))              # their apply link, unchanged
+        self.assertEqual(filters.parse_annual_pay(jobs[0].pay_text, "INR"), (600000, 900000))
+        self.assertTrue(all(filters.location_matches(j.location, ["Remote"]) for j in jobs))
+
+    def test_one_download_per_day_is_reused(self):
+        from jobfinder.sources.remote import fetch_himalayas
+        with tempfile.TemporaryDirectory() as tmp:
+            fetch_himalayas(self.himalayas_feed, "India", 7, NOW, lambda s: None, cache_dir=tmp)
+            calls = len(self.urls)
+            again = fetch_himalayas(self.himalayas_feed, "India", 7, NOW, lambda s: None, cache_dir=tmp)
+            self.assertEqual(len(self.urls), calls)
+            self.assertEqual(len(again), 2)
+
+    def test_remoteok_keeps_only_jobs_clearly_open_to_your_country(self):
+        from jobfinder.sources.remote import fetch_remoteok
+        feed = [{"legal": "API terms"},
+                {"id": 1, "position": "Content Writer", "company": "A", "location": "Worldwide", "url": "https://remoteok.com/1",
+                 "date": "2026-10-20T00:00:00+00:00"},
+                {"id": 2, "position": "SEO Executive", "company": "B", "location": "India", "url": "https://remoteok.com/2"},
+                {"id": 3, "position": "SEO Executive", "company": "C", "location": "", "url": "https://remoteok.com/3"},
+                {"id": 4, "position": "SEO Executive", "company": "D", "location": "Remote - US", "url": "https://remoteok.com/4"}]
+        jobs = fetch_remoteok(lambda url: feed, "India", NOW)
+        self.assertEqual([(j.company, j.location) for j in jobs],
+                         [("A", "Remote (worldwide)"), ("B", "Remote (open to India)")])
+
+
+class CompanyListTests(unittest.TestCase):
+    def test_yc_candidates_and_board_guesses(self):
+        from jobfinder.discover import board_guesses, yc_candidates
+        companies = [{"name": "Kite Labs", "slug": "kite-labs", "website": "https://www.kitelabs.in/about",
+                      "all_locations": "Bengaluru, KA, India", "regions": ["India"], "isHiring": True},
+                     {"name": "Orbit", "slug": "orbit", "website": "https://orbit.com",
+                      "all_locations": "San Francisco, CA, USA", "regions": ["United States of America", "Remote"]},
+                     {"name": "Dormant", "slug": "dormant", "all_locations": "Pune, MH, India", "isHiring": False}]
+        self.assertEqual([c["name"] for c in yc_candidates(companies, ["Hyderabad", "india"])], ["Kite Labs"])
+        self.assertEqual([c["name"] for c in yc_candidates(companies, ["india", "remote"])], ["Kite Labs", "Orbit"])
+        self.assertEqual(board_guesses(companies[0]), ["kite-labs", "kitelabs"])
+
+    def test_find_board_tries_each_name_on_each_platform(self):
+        from jobfinder.discover import check_board, find_board
+        company = {"name": "Beta Inc", "slug": "beta-inc", "website": "https://beta.io"}
+        result = find_board(company, lambda platform, board: check_board(platform, board, ["Hyderabad"], fake_fetch),
+                            lambda s: None)
+        self.assertEqual((result["platform"], result["board"], result["name"]), ("lever", "beta", "Beta Inc"))
+        missing = find_board({"name": "Nope", "slug": "nope"}, lambda p, b: {"ok": False}, lambda s: None)
+        self.assertFalse(missing["ok"])
+
+    def test_starter_list_is_valid_and_has_no_duplicates(self):
+        from jobfinder.cli import STARTER_COMPANIES
+        rows = read_companies(str(STARTER_COMPANIES))
+        self.assertGreaterEqual(len(rows), 20)
+        pairs = [(r["platform"], r["board"]) for r in rows]
+        self.assertEqual(len(pairs), len(set(pairs)))
+        self.assertTrue(all(r["platform"] in ("greenhouse", "lever", "ashby") and r["name"] for r in rows))
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ from typing import Callable, Dict, List, Tuple
 from .filters import INDIA_PLACES, location_matches
 from .models import Job
 from .sources import SourceError
+from .textutil import has_phrase, norm
 
 # boards.greenhouse.io/acme, job-boards.greenhouse.io/acme, boards-api.greenhouse.io/v1/boards/acme,
 # boards.greenhouse.io/embed/job_board?for=acme, jobs.lever.co/acme, jobs.ashbyhq.com/acme
@@ -51,6 +52,46 @@ def check_board(platform: str, board: str, preferred: List[str],
             "in_india": sum(location_matches(j.location, INDIA_PLACES + ["remote"], "India") for j in jobs)}
 
 
+YC_HIRING = "https://yc-oss.github.io/api/companies/hiring.json"   # unofficial daily copy of YC's list
+PLATFORMS = ("greenhouse", "lever", "ashby")
+
+
+def yc_candidates(companies: List[Dict], places: List[str]) -> List[Dict]:
+    """YC companies that are hiring and list one of these places in their locations or regions."""
+    wanted = [norm(place) for place in places if norm(place)]
+    picked = []
+    for company in companies or []:
+        where = norm(f"{company.get('all_locations', '')} {' '.join(company.get('regions') or [])}")
+        if company.get("isHiring", True) and any(has_phrase(where, place) for place in wanted):
+            picked.append(company)
+    return picked
+
+
+def board_guesses(company: Dict) -> List[str]:
+    """Likely board names: the YC slug, the website's name (acme.com -> acme), the name without spaces."""
+    domain = re.sub(r"^https?://(www\.)?", "", company.get("website") or "").split("/")[0].split(".")[0]
+    guesses = [company.get("slug", ""), domain, norm(company.get("name", "")).replace(" ", "")]
+    seen: List[str] = []
+    for guess in (g.lower().strip() for g in guesses):
+        if re.fullmatch(r"[a-z0-9][a-z0-9_.-]*", guess) and guess not in seen:
+            seen.append(guess)
+    return seen
+
+
+def find_board(company: Dict, check: Callable[[str, str], Dict], sleep: Callable[[float], None]) -> Dict:
+    """Try each likely board name on each platform; the first that can be read wins."""
+    tried = 0
+    for guess in board_guesses(company):
+        for platform in PLATFORMS:
+            if tried:
+                sleep(0.4)
+            tried += 1
+            result = check(platform, guess)
+            if result["ok"]:
+                return {**result, "name": company.get("name") or guess}
+    return {"ok": False, "name": company.get("name", "?"), "error": "no Greenhouse, Lever or Ashby board found"}
+
+
 def known_boards(path: str) -> set:
     file = Path(path)
     if not file.exists():
@@ -73,4 +114,4 @@ def append_companies(path: str, results: List[Dict], example: str = "companies.e
             handle.write("\n")
         writer = csv.writer(handle)
         for result in results:
-            writer.writerow([result["board"], result["platform"], result["board"], "", ""])
+            writer.writerow([result.get("name") or result["board"], result["platform"], result["board"], "", ""])

@@ -1,0 +1,26 @@
+# Starter list: companies whose public Greenhouse, Lever or Ashby boards had jobs in India or remote-India
+# when checked on 2026-10-22. Every run reads this list plus your own companies.csv. Boards change:
+# a company that stops hiring in India simply returns no matching jobs.
+name,platform,board,email,x_handle
+Keyloop,lever,keyloop,,
+Outreach,lever,outreach,,
+Cyara,lever,cyara,,
+CRED,lever,cred,,
+Yuno,lever,yuno,,
+Meesho,lever,meesho,,
+Zeta,lever,zeta,,
+Storable,greenhouse,storable,,
+Zenoti,greenhouse,zenoti,,
+HighRadius,greenhouse,highradius,,
+Zscaler,greenhouse,zscaler,,
+Toast,greenhouse,toast,,
+Celigo,greenhouse,celigo,,
+Druva,greenhouse,druva,,
+Observe.AI,greenhouse,observeai,,
+GitLab,greenhouse,gitlab,,
+Atlan,ashby,atlan,,
+Notion,ashby,notion,,
+Groww,greenhouse,groww,,
+FamPay,lever,fampay,,
+Bolna AI,ashby,bolna,,
+Cardboard,ashby,cardboard,,

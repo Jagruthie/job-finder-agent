@@ -47,6 +47,30 @@ python -m jobfinder run          # every profile in profiles/, one track each
 
 On Windows, use `copy` instead of `cp`.
 
+## Where jobs come from
+
+Every run uses your saved filters on all of these, so a rerun repeats the same search with fresh jobs:
+
+| Source | What it is | Follows your filters how |
+| --- | --- | --- |
+| Starter company list (`data/companies-starter.csv`) | About 20 companies checked to have jobs in India or remote-India on their public Greenhouse, Lever or Ashby boards | All their jobs are read; your city, role, skills and experience filters pick the right ones. Turn off with `"starter_companies": false` |
+| Your companies (`companies.csv`) | Companies you or `add` / `discover` added | Same as above |
+| Remote job boards: [Himalayas](https://himalayas.app) and [Remote OK](https://remoteok.com) | Free public feeds of remote jobs | Used when "Remote" is one of your places. Only jobs open to your `remote_country` (default India) or worldwide are kept |
+| Job-alert emails in `inbox/` | LinkedIn alerts you saved | The alert's own search, then your filters on top |
+
+**Remote job boards.** Himalayas is searched for jobs open to your country, newest first; Remote OK's feed is filtered to jobs that clearly say worldwide, India, Asia or APAC (half its jobs give no location, so those are skipped). Each source is downloaded at most once a day and kept in `cache/`, as they ask. Their apply links are kept unchanged and the Platform column names the source, which is how their terms ask to be credited. Not used: Remotive (its free feed returns only 10 jobs; the full API is paid) and Product Hunt (its API needs an account, has no jobs, and is non-commercial by default).
+
+## Find startups from Y Combinator
+
+```bash
+python -m jobfinder discover yc            # YC companies that are hiring and located in India
+python -m jobfinder discover yc --remote   # also YC companies that hire remotely (slower)
+```
+
+It reads an unofficial daily copy of Y Combinator's list of hiring companies (on your computer; the list is not stored in this repo, because it states no license), tries each company's likely board name on Greenhouse, Lever and Ashby, shows what it finds, and asks before adding the ones with jobs in India or remote-India to `companies.csv`.
+
+Expect most YC companies not to be found: in October 2026, 7 of 50 India-based hiring YC companies used these three platforms; the rest use other systems or YC's own job pages, which this agent cannot read. A guessed board name can belong to a different company with the same name, which is why only boards with jobs in India are added; check new names in `companies.csv`.
+
 ## Find companies hiring near you (location first)
 
 Guessing company names finds few jobs in your city. It works much better to start from jobs that are already in your city, then add the companies behind them.
@@ -132,6 +156,7 @@ Never committed (see `.gitignore`): your resumes, your profiles, `settings.json`
 - **Coverage.** Only companies on Greenhouse, Lever or Ashby can be read, and only the ones you list.
 - **Dates can mislead.** Greenhouse and Ashby dates can change when a company edits or reposts an old job, so a few stale jobs will look fresh.
 - **Skills matching is word matching.** It finds exact words, not ideas: "built dashboards" does not count as Power BI. Very short skills (Go, R, C++) are skipped because their letters match ordinary words. Add aliases in `data/skills.json` to help.
+- **Broad skills never keep a job by themselves.** Skills listed as `generic_skills` in `data/skills.json` (research, communication, Excel and similar) count for Fit % only. In a track with roles, a job kept for its skills must also need at least 2 specific skills those roles need, so a PM track does not pick up developer jobs because you know Python and SQL. Skills in `exact_case` (such as GEO) match only in capitals.
 - **Matching by skills is a wider net.** On real postings it mostly found sensible leads, but some are loose. If it brings in jobs you do not want, raise `skill_match_min`, or set `match_by` to `titles`.
 - **Experience reading is a guess from text.** Check the Experience column.
 - **Platform rules.** The platforms' API docs state no usage terms, but check their terms yourself, and keep the request delay.
