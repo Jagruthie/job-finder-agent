@@ -25,6 +25,7 @@ class Vocab:
         self.titles: Dict[str, dict] = data.get("titles", {})
         self.generic: set = set(data.get("generic_skills", []))
         self.exact_case: set = set(data.get("exact_case", []))
+        self.deal_breakers: Dict[str, dict] = data.get("deal_breakers", {})
         # An exact-case skill's name is matched separately, in capitals only ('GEO' in a post, not 'geo').
         self._skill_phrases = {
             name: sorted(({norm(name)} - ({norm(name)} if name in self.exact_case else set()))
@@ -90,6 +91,20 @@ class Vocab:
                     continue
                 found.append(item)
         return found[:limit]
+
+    def deal_breaker_terms(self, group: str, text: str) -> List[str]:
+        """Distinct terms of a deal-breaker group (such as Coding) found in a job post."""
+        info = self.deal_breakers.get(group, {})
+        text_norm = norm(text)
+        found = {phrase for phrase in info.get("phrases", []) if has_phrase(text_norm, norm(phrase))}
+        found |= {term for term in info.get("exact", [])
+                  if re.search(rf"(?<![\w.]){re.escape(term)}(?![\w#+])", text or "")}
+        return sorted(found)
+
+    def deal_breaker_title(self, group: str, title: str) -> bool:
+        """True if the title itself names the work, such as 'Developer' for Coding."""
+        title_norm = norm(title)
+        return any(has_phrase(title_norm, norm(word)) for word in self.deal_breakers.get(group, {}).get("title_words", []))
 
     def skills_in_name(self, name: str) -> set:
         """Skills whose words sit inside a company name: Git/GitHub for 'gitlab', Notion for 'Notion'."""

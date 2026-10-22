@@ -23,6 +23,10 @@ DEFAULT_SETTINGS = {
     "remote_country": "India",          # "Remote" in your cities means remote in this country (empty: anywhere)
     "remote_sources": ["himalayas", "remoteok"],   # searched when "Remote" is one of your cities; [] turns them off
     "starter_companies": True,          # also read data/companies-starter.csv (companies checked to hire in India)
+    # Deal-breakers (per profile, such as Coding): a post naming this many different terms of it is removed,
+    # and one naming at least `deal_breaker_flag` of them is kept but flagged and ranked lower.
+    "deal_breaker_remove": 4,
+    "deal_breaker_flag": 2,
     "pay_currency": "INR",              # INR or USD; pay in another currency is never compared
     "min_annual_pay": None,             # full yearly amount, e.g. 300000 for 3 LPA. None means no minimum
     "max_annual_pay": None,             # optional upper end of your range. None means no maximum
@@ -37,7 +41,8 @@ DEFAULT_SETTINGS = {
 
 COLUMNS = [
     "Rank", "Track", "Company", "Role", "Matched by", "Apply link", "Posted", "Date basis",
-    "Experience", "Experience bucket", "Fit %", "Matched skills", "Missing skills",
+    "Experience", "Experience bucket", "Priority skills", "Deal-breaker check", "Fit %", "Matched skills",
+    "Missing skills",
     "Location", "Location match", "Shift 10-6 mentioned", "Pay", "Pay check",
     "Company email", "Founder X handle", "Platform",
 ]
@@ -111,12 +116,16 @@ def prepare_profile(profile: dict, vocab: Vocab) -> dict:
     skills = clean_list(profile.get("skills", []))
     # Skills you confirmed that are not in data/skills.json are matched by their own words in the job text.
     own = [(skill, norm(skill)) for skill in skills if skill not in vocab.skills and len(norm(skill)) >= 3]
-    # The specific skills your chosen roles need (from data/skills.json, without broad ones such as Research).
-    # A job kept for its skills alone must need 2 of these, so a PM track does not pick up developer jobs
-    # just because you know Python and SQL.
-    core = {s for title in clean_list(profile.get("titles", [])) for s in vocab.titles.get(title, {}).get("skills", [])}
+    avoid = [group for group in clean_list(profile.get("deal_breakers", [])) if group in vocab.deal_breakers]
+    avoided_skills = {s for group in avoid for s in vocab.deal_breakers[group].get("skills", [])}
+    priority = [s for s in clean_list(profile.get("priority_skills", [])) if s not in avoided_skills]
+    # The specific skills this track is about: your priority skills, or else the skills your chosen roles need
+    # (from data/skills.json), without broad ones such as Research and without deal-breakers. A job kept for its
+    # skills alone must need 2 of these, so a PM track does not pick up developer jobs because you know Python.
+    core = set(priority) or {s for title in clean_list(profile.get("titles", []))
+                             for s in vocab.titles.get(title, {}).get("skills", [])} & set(skills)
     return {**profile, "_phrases": sorted(set(phrases)), "_skills": set(skills), "_own_skills": own,
-            "_core": (core & set(skills)) - vocab.generic}
+            "_core": core - vocab.generic - avoided_skills, "_priority": priority, "_avoid": avoid}
 
 
 def common_skills(found_per_job: List[List[str]], share: float = 0.2, minimum_jobs: int = 20) -> set:
@@ -214,6 +223,17 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
         if not candidates:
             stats["title_mismatch"] += 1
             continue
+        # Deal-breakers: a track that refuses some work (such as Coding) drops jobs that depend on it.
+        breaker_terms: Dict[str, List[str]] = {}
+        for profile in list(candidates):
+            for group in profile["_avoid"]:
+                terms = breaker_terms.setdefault(group, vocab.deal_breaker_terms(group, text))
+                if vocab.deal_breaker_title(group, job.title) or len(terms) >= cfg["deal_breaker_remove"]:
+                    candidates.remove(profile)
+                    break
+        if not candidates:
+            stats["deal_breaker"] += 1
+            continue
         role_phrases = [phrase for profile in candidates for phrase in profile["_phrases"]]
         if has_excluded_word(job.title, cfg["exclude_title_words"], role_phrases) or higher_level_title(job.title):
             stats["senior_title"] += 1
@@ -249,12 +269,17 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
             stats["pay_dropped"] += 1
             continue
 
-        best = None
-        for profile in candidates:
-            matched, missing, pct = fits[profile["name"]]
-            if best is None or (pct if pct is not None else -1) > (best[1] if best[1] is not None else -1):
-                best = (profile["name"], pct, matched, missing)
-        track, pct, matched, missing = best
+        # The track whose own direction this job fits best wins (its priority skills, or its roles' skills),
+        # then the higher Fit %.
+        def track_score(profile):
+            matched, _, pct = fits[profile["name"]]
+            return (len(set(matched) & profile["_core"]), pct if pct is not None else -1)
+        chosen = max(candidates, key=track_score)
+        track = chosen["name"]
+        matched, missing, pct = fits[track]
+        priority_hit = [s for s in matched if s in chosen["_priority"]]
+        flags = [f"mentions {group.lower()}: {', '.join(breaker_terms[group])}" for group in chosen["_avoid"]
+                 if len(breaker_terms.get(group, [])) >= cfg["deal_breaker_flag"]]
         if matched_by == "skills":
             matched_by = f"skills: {', '.join(specific[track])}"
             stats["kept_by_skills"] += 1
@@ -269,6 +294,8 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
             "Date basis": basis,
             "Experience": exp_text or "Not stated",
             "Experience bucket": BUCKET_LABELS[level],
+            "Priority skills": ", ".join(priority_hit),
+            "Deal-breaker check": "; ".join(flags),
             "Fit %": "" if pct is None else pct,
             "Matched skills": ", ".join(matched),
             "Missing skills": ", ".join(missing),
@@ -282,6 +309,8 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
             "Platform": job.platform,
             "_sort": (level,
                       0 if matched_by == "role title" else 1,
+                      1 if flags else 0,
+                      -len(priority_hit),
                       pay_tier,
                       0 if loc_ok else 1,
                       0 if shift_mentioned(text) else 1,

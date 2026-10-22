@@ -78,6 +78,7 @@ def print_summary(stats, failures, settings, rows=(), profiles=()) -> None:
     print(f"  skipped, already removed earlier: {stats['already_dropped']}")
     print(f"  not your roles and not enough of your skills: {stats['title_mismatch']}")
     print(f"  too senior (title or years): {stats['senior_title'] + stats['too_senior']}")
+    print(f"  removed by your deal-breakers (for example coding-heavy): {stats['deal_breaker']}")
     print(f"  dropped for location: {stats['location_dropped']}")
     print(f"  dropped for pay outside your range: {stats['pay_dropped']}")
     print(f"Kept: {stats['kept']} (of which experience not stated: {stats['kept_experience_not_stated']}; "

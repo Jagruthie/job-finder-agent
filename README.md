@@ -17,8 +17,9 @@ It reads only public job lists that Greenhouse, Lever and Ashby publish for comp
    - **by role title:** the title matches a role you chose (any city; other cities rank lower), or
    - **by skills:** the title is not on your list, but the job asks for at least 3 of your specific skills, and you have at least half of the skills it mentions. These must be in your cities. Skills found in most postings (hiring notices, "communication") and skills in the company's own name do not count here.
    Either way, jobs asking for more experience than you set are removed (jobs that do not state it go in a review bucket).
-6. Shows its reasons: which skills matched, which are missing, and whether a job was kept for its title or its skills.
-7. Writes `output/jobs-<date>.csv`, best matches first.
+6. Applies each track's **priorities and deal-breakers**: jobs needing more of your priority skills rank higher, and a track can refuse work it should not depend on (built in: **Coding**). A post naming 4 or more different coding terms (Python, Java, backend, write code, ...) or with Engineer/Developer in its title is removed; one naming 2–3 is kept but flagged ("mentions coding: sql, apis") and ranked lower. On 105 real PM-type postings (October 2026), 78% named 0–1 coding terms and 3% named 4 or more; on 644 engineering postings, 69% named 4 or more.
+7. Shows its reasons: which skills matched, which priority skills it needs, any deal-breaker flag, and whether a job was kept for its title or its skills.
+8. Writes `output/jobs-<date>.csv`, best matches first.
 
 ## Try it first on fake jobs
 
@@ -116,6 +117,8 @@ Good to know:
 | Apply link | The exact page where you apply |
 | Posted / Date basis | The platform's date, or "first seen" when the platform gives none. First-seen dates start counting on your first run, so their real age is unknown |
 | Experience bucket | "Within your range": the posting states years that fit your setting. "Entry-level title (years not stated)": no years given, but the title says Associate, Junior, Trainee, Graduate or "I" (as in Product Manager I). "Not stated (review)": no years and no sign either way, so read it. Ranked in that order. Titles marked II, III or IV are removed as above entry level |
+| Priority skills | Your priority skills this job needs. More of them ranks higher |
+| Deal-breaker check | Empty, or a flag such as "mentions coding: sql, apis" when a post names 2–3 terms of a deal-breaker you set. Flagged jobs rank lower; posts naming 4 or more are removed |
 | Matched by | "role title", or "skills: ..." with the specific skills that earned a job its place when its title is not on your list. Title matches rank above skills matches |
 | Fit % | Share of the skills the job mentions that are on your profile. Built-in skills (`data/skills.json`) and your own skills (matched by their exact words) both count |
 | Missing skills | Skills the job mentions that are not on your profile |
@@ -132,6 +135,8 @@ Run `python -m jobfinder setup`. It asks a few questions in the terminal and sav
 | Skills: the ones found in your resume, which you confirm or edit. Besides the built-in list, it picks up items from your resume's own skill lists (such as "Tools: Power BI, Tableau"), never your name, email, phone, cities or education | `skills` | each profile file in `profiles/` |
 | Categories this track searches, when your skills fit roles in more than one. The rest can become a separate track | — | a new profile file |
 | Roles: the ones that need 2 or more of your skills, which you confirm or edit | `titles` | each profile file in `profiles/` |
+| Deal-breakers: work this track's jobs must not depend on (Coding), or none | `deal_breakers` | each profile file |
+| Priority skills: what the jobs should mainly be about. Suggested from your roles, without deal-breaker skills | `priority_skills` | each profile file |
 | Cities | `preferred_locations`, `location_mode` | `settings.json` |
 | Most years of experience a job may ask for (`1`, or a range such as `0-1`) | `max_experience_years` | `settings.json` |
 | Posted within how many days | `freshness_days` | `settings.json` |

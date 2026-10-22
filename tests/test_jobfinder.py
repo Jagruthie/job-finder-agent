@@ -13,7 +13,7 @@ from jobfinder import filters
 from jobfinder.setup import run_setup
 from jobfinder.models import Job
 from jobfinder.cli import load_profiles
-from jobfinder.pipeline import (ProfileError, clean_list, profile_files, read_companies, run_pipeline, write_csv,
+from jobfinder.pipeline import (ProfileError, clean_list, prepare_profile, profile_files, read_companies, run_pipeline, write_csv,
                                 COLUMNS)
 from jobfinder.sources import SourceError, fetch_board
 from jobfinder.textutil import norm, parse_dt, strip_html
@@ -362,6 +362,7 @@ class SetupTests(unittest.TestCase):
                 "",                             # resume: Enter skips (profile already exists)
                 "",                             # skills for pm: Enter keeps them
                 "Associate Product Manager, Growth Rocketeer",   # roles for pm
+                "", "",                         # no deal-breakers, suggested priority skills
             ]
             said = []
             run_setup(settings_path, profiles, VOCAB, ask=self.scripted(answers), say=said.append)
@@ -406,7 +407,7 @@ class SetupTests(unittest.TestCase):
             with open(os.path.join(profiles, "seo.json"), "w") as handle:
                 json.dump({"name": "seo", "skills": ["SEO", "Keyword Research", "Ahrefs"], "titles": []}, handle)
             run_setup(os.path.join(tmp, "settings.json"), profiles, VOCAB, say=lambda s: None,
-                      ask=self.scripted(["", "", "", "", "none", "", "", ""]))   # Enter at skills, then Enter at roles
+                      ask=self.scripted(["", "", "", "", "none", "", "", "", "", ""]))   # Enter at skills, roles, deal-breakers, priority
             with open(os.path.join(profiles, "seo.json")) as handle:
                 self.assertIn("SEO Executive", json.load(handle)["titles"])
 
@@ -418,7 +419,7 @@ class SetupTests(unittest.TestCase):
                 json.dump({"name": "x", "skills": [], "titles": []}, handle)
             said = []
             run_setup(os.path.join(tmp, "settings.json"), profiles, VOCAB, say=said.append,
-                      ask=self.scripted(["", "", "", "", "none", "", "", "", "SEO Executive"]))
+                      ask=self.scripted(["", "", "", "", "none", "", "", "", "SEO Executive", "", ""]))
             with open(os.path.join(profiles, "x.json")) as handle:
                 self.assertEqual(json.load(handle)["titles"], ["SEO Executive"])
             self.assertTrue(any("at least one role" in line for line in said))
@@ -430,7 +431,7 @@ class SetupTests(unittest.TestCase):
             with open(os.path.join(profiles, "seo.json"), "w") as handle:
                 json.dump({"name": "seo", "skills": [], "titles": ["SEO Executive"]}, handle)
             run_setup(os.path.join(tmp, "settings.json"), profiles, VOCAB, say=lambda s: None,
-                      ask=self.scripted(["", "", "", "", "none", "", "", " , ,"]))
+                      ask=self.scripted(["", "", "", "", "none", "", "", " , ,", "", ""]))
             with open(os.path.join(profiles, "seo.json")) as handle:
                 self.assertEqual(json.load(handle)["titles"], ["SEO Executive"])
 
@@ -568,7 +569,7 @@ class ManualTestingBugTests(unittest.TestCase):
                                                           "titles": ["Product Analyst"]}})
             said = []
             run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=said.append,
-                      ask=self.scripted(["", "", "", "", "none", "", "", "keep", "yes", ""]))
+                      ask=self.scripted(["", "", "", "", "none", "", "", "keep", "yes", "", "", ""]))
             with open(os.path.join(folder, "pm.json")) as handle:
                 self.assertEqual(json.load(handle)["titles"], ["Product Analyst"])
             self.assertTrue(any("'keep' is not a role name" in line and "press Enter" in line for line in said))
@@ -577,7 +578,7 @@ class ManualTestingBugTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             folder = self.make_profiles(tmp, {"seo.json": {"name": "seo", "skills": [], "titles": ["SEO Executive"]}})
             run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=lambda s: None,
-                      ask=self.scripted(["", "", "", "", "none", "", "", "Content Writer, none", "Content Writer"]))
+                      ask=self.scripted(["", "", "", "", "none", "", "", "Content Writer, none", "Content Writer", "", ""]))
             with open(os.path.join(folder, "seo.json")) as handle:
                 self.assertEqual(json.load(handle)["titles"], ["Content Writer"])
 
@@ -585,7 +586,7 @@ class ManualTestingBugTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             folder = self.make_profiles(tmp, {"seo.json": {"name": "seo", "skills": ["SEO"], "titles": ["SEO Executive"]}})
             run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=lambda s: None,
-                      ask=self.scripted(["", "", "", "", "none", "", "keep", "SEO, Ahrefs", ""]))
+                      ask=self.scripted(["", "", "", "", "none", "", "keep", "SEO, Ahrefs", "", "", ""]))
             with open(os.path.join(folder, "seo.json")) as handle:
                 self.assertEqual(json.load(handle)["skills"], ["SEO", "Ahrefs"])
 
@@ -632,7 +633,8 @@ class RolesFromSkillsTests(unittest.TestCase):
             queue = ["", "", "", "", "none",
                      "",                                         # resume: Enter skips
                      "SEO, Keyword Research, Ahrefs, Writing",   # the user corrects the skills
-                     ""]                                         # Enter accepts the roles that need them
+                     "",                                         # Enter accepts the roles that need them
+                     "", ""]                                     # no deal-breakers, suggested priorities
             run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=said.append,
                       ask=lambda prompt: queue.pop(0))
             with open(os.path.join(folder, "seo.json")) as handle:
@@ -665,7 +667,8 @@ class ResumeInSetupTests(unittest.TestCase):
                      "seo",                                   # profile name
                      "",                                      # no more resumes
                      "",                                      # Enter accepts the skills found
-                     ""]                                      # Enter accepts the roles that need them
+                     "",                                      # Enter accepts the roles that need them
+                     "", ""]                                  # no deal-breakers, suggested priorities
             run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=said.append,
                       ask=lambda prompt: queue.pop(0))
             with open(os.path.join(folder, "seo.json")) as handle:
@@ -730,8 +733,8 @@ class TwoTrackTests(unittest.TestCase):
                      "",                        # Enter accepts the skills
                      str(categories.index("Product & Strategy") + 1),   # pm searches Product & Strategy only
                      "seo",                     # the other category becomes track 'seo'
-                     "",                        # Enter accepts pm's roles
-                     ""]                        # Enter accepts seo's roles
+                     "", "", "",                # pm: Enter accepts roles, no deal-breakers, priorities
+                     "", "", ""]                # seo: the same
             run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=said.append,
                       ask=lambda prompt: queue.pop(0))
             with open(os.path.join(folder, "pm.json")) as handle:
@@ -1046,7 +1049,7 @@ class SkillsFirstTests(unittest.TestCase):
                 handle.write("Tools: Kubernetes, Terraform, Ansible, Prometheus, Grafana\n")
             folder = os.path.join(tmp, "profiles")
             said = []
-            queue = ["", "", "", "", "none", resume, "ops", "", "", ""]   # resume, name, no more, skills, roles
+            queue = ["", "", "", "", "none", resume, "ops", "", "", "", "", ""]   # ..., skills, roles, deal-breakers, priority
             run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=said.append,
                       ask=lambda prompt: queue.pop(0))
             with open(os.path.join(folder, "ops.json")) as handle:
@@ -1139,6 +1142,67 @@ class CompanyListTests(unittest.TestCase):
         pairs = [(r["platform"], r["board"]) for r in rows]
         self.assertEqual(len(pairs), len(set(pairs)))
         self.assertTrue(all(r["platform"] in ("greenhouse", "lever", "ashby") and r["name"] for r in rows))
+
+
+class PriorityAndDealBreakerTests(unittest.TestCase):
+    """For someone who wants PM work that is about planning, not coding."""
+    PM = {"name": "pm", "skills": ["Product Management", "Roadmapping", "User Research", "Product Specs", "SQL", "Python"],
+          "titles": ["Associate Product Manager", "Product Owner"], "deal_breakers": ["Coding"],
+          "priority_skills": ["Product Management", "Roadmapping", "User Research", "Product Specs", "SQL"]}
+
+    def job(self, job_id, title, text):
+        return Job("demo", "x", "Acme", job_id, title, "Hyderabad", f"https://e/{job_id}", text, NOW)
+
+    def run_jobs(self, jobs, profiles):
+        return run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], profiles, {"preferred_locations": ["Hyderabad"]},
+                            VOCAB, {"first_seen": {}, "dropped": {}}, lambda p, b, n: jobs, now=NOW)
+
+    def test_coding_terms_are_found_exactly(self):
+        terms = VOCAB.deal_breaker_terms("Coding", "Python, SQL and C# on .NET; the rest is planning in Notion.")
+        self.assertEqual(terms, [".NET", "C#", "python", "sql"])
+        self.assertEqual(VOCAB.deal_breaker_terms("Coding", "Plan the roadmap; talk to the rest of the team."), [])
+        self.assertTrue(VOCAB.deal_breaker_title("Coding", "Junior Software Developer"))
+        self.assertFalse(VOCAB.deal_breaker_title("Coding", "Associate Product Manager"))
+
+    def test_coding_heavy_jobs_are_removed_and_light_mentions_flagged(self):
+        rows, stats, _ = self.run_jobs([
+            self.job("1", "Associate Product Manager", "0-1 years. Roadmap, user research, specs. SQL and APIs a plus."),
+            self.job("2", "Associate Product Manager", "0-1 years. Roadmap and user research. Write code in Python, "
+                                                       "Java and SQL; build backend APIs."),
+            self.job("3", "Associate Product Manager", "0-1 years. Roadmap, user research and product specs."),
+            self.job("4", "Product Owner - Developer", "0-1 years. Roadmap.")], [self.PM])
+        self.assertEqual([r["Apply link"][-1] for r in rows], ["3", "1"])      # clean first, flagged second
+        self.assertEqual(rows[1]["Deal-breaker check"], "mentions coding: apis, sql")
+        self.assertEqual(rows[0]["Deal-breaker check"], "")
+        self.assertEqual(stats["deal_breaker"], 2)                              # 2: coding-heavy, 4: developer title
+
+    def test_more_priority_skills_rank_higher_and_deal_breaker_skills_are_not_priorities(self):
+        rows, _, _ = self.run_jobs([
+            self.job("1", "Associate Product Manager", "0-1 years. Roadmap."),
+            self.job("2", "Associate Product Manager", "0-1 years. Roadmap, user research and product specs.")], [self.PM])
+        self.assertEqual([r["Apply link"][-1] for r in rows], ["2", "1"])
+        self.assertEqual(rows[0]["Priority skills"], "Product Management, Product Specs, Roadmapping, User Research")
+        prepared = prepare_profile(self.PM, VOCAB)
+        self.assertNotIn("SQL", prepared["_priority"])                          # SQL is Coding, a deal-breaker here
+
+    def test_setup_saves_deal_breakers_and_suggests_priorities_without_them(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = os.path.join(tmp, "profiles")
+            os.makedirs(folder)
+            with open(os.path.join(folder, "pm.json"), "w") as handle:
+                json.dump({"name": "pm", "skills": ["Product Management", "Roadmapping", "SQL", "Python"],
+                           "titles": ["Associate Product Manager", "Business Analyst"]}, handle)
+            said, asked = [], []
+            answers = ["", "", "", "", "none", "", "", "", "banana", "coding", ""]
+            def ask(prompt):
+                asked.append(prompt)
+                return answers.pop(0)
+            run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=said.append, ask=ask)
+            with open(os.path.join(folder, "pm.json")) as handle:
+                saved = json.load(handle)
+            self.assertEqual(saved["deal_breakers"], ["Coding"])
+            self.assertEqual(saved["priority_skills"], ["Product Management", "Roadmapping"])
+            self.assertTrue(any("Please type one of: Coding" in line for line in said))
 
 
 if __name__ == "__main__":

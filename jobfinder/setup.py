@@ -190,13 +190,24 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
         if titles and titles != default:
             say(f"  Roles saved now: {', '.join(titles)}")
         new_titles = _ask_profile_list(ask, say, "Roles", default, hint, "SEO Executive", required=not skills_only_ok)
-        if file.exists() and new_skills == saved_skills and new_titles == saved_titles:
+        saved_breakers, saved_priority = profile.get("deal_breakers", []), profile.get("priority_skills", [])
+        new_breakers = _ask_deal_breakers(ask, say, vocab, clean_list(saved_breakers))
+        avoided = {s for group in new_breakers for s in vocab.deal_breakers[group].get("skills", [])}
+        suggested = [s for title in new_titles for s in vocab.titles.get(title, {}).get("skills", [])
+                     if s in new_skills and s not in vocab.generic and s not in avoided]
+        priority_default = [s for s in clean_list(saved_priority) if s not in avoided] or list(dict.fromkeys(suggested))
+        say("  Priority skills: what this track's jobs should mainly be about. Jobs needing more of them rank higher.")
+        new_priority = _ask_profile_list(ask, say, "Priority skills", priority_default, "Enter accepts these",
+                                         "Roadmapping, User Research", required=False)
+        if (file.exists() and new_skills == saved_skills and new_titles == saved_titles
+                and new_breakers == saved_breakers and new_priority == saved_priority):
             continue
         unknown = [t for t in new_titles if t not in vocab.titles]
         if unknown:
             say("  Not in the built-in list (they will match job titles containing those exact words): "
                 + ", ".join(unknown))
         profile["skills"], profile["titles"] = new_skills, new_titles
+        profile["deal_breakers"], profile["priority_skills"] = new_breakers, new_priority
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(json.dumps(profile, indent=2), encoding="utf-8")
         say(f"  Saved {file}.")
@@ -235,6 +246,28 @@ def _ask_resumes(ask: Ask, say: Say, profiles_dir: Path, vocab: Vocab, read_resu
         if file.exists():
             say(f"  Profile '{name}' already exists. You will confirm the skills from this resume before it changes.")
         found[file] = skills
+
+
+def _ask_deal_breakers(ask: Ask, say: Say, vocab: Vocab, current: List[str]) -> List[str]:
+    """Work this track's jobs must not depend on, such as Coding. Enter keeps what is shown; 'none' clears it."""
+    known = {group.lower(): group for group in vocab.deal_breakers}
+    if not known:
+        return []
+    shown = ", ".join(current) or "none"
+    while True:
+        answer = ask(f"  Deal-breakers: work these jobs must not depend on ({', '.join(known.values())}) [{shown}] "
+                     "(Enter keeps this, 'none' clears it, or type one): ").strip()
+        if not answer:
+            return list(current)
+        if answer.lower() in ("none", "no", "-"):
+            return []
+        picked = [part.strip().lower() for part in answer.split(",") if part.strip()]
+        if picked and all(part in known for part in picked):
+            chosen = [known[part] for part in picked]
+            say(f"  Jobs that clearly depend on {', '.join(c.lower() for c in chosen)} will be removed; "
+                "ones that only mention it a little are kept but flagged.")
+            return chosen
+        say(f"  Please type one of: {', '.join(known.values())}, or 'none', or press Enter to keep [{shown}].")
 
 
 def _ask_categories(ask: Ask, say: Say, name: str, groups) -> List[str]:
@@ -288,7 +321,7 @@ def _ask_profile_list(ask: Ask, say: Say, label: str, default: List[str], hint: 
                       required: bool = True) -> List[str]:
     """Ask for a comma separated list of skills or roles. Enter on an empty line keeps the default.
     Words like 'keep' or 'yes' are refused, so they are never saved as a role or skill."""
-    noun = {"Skills": "skill", "Roles": "role"}[label]
+    noun = {"Skills": "skill", "Roles": "role", "Priority skills": "skill"}[label]
     while True:
         answer = ask(f"  {label} [{', '.join(default)}] ({hint}, or type a new comma separated list): ").strip()
         if not answer:
