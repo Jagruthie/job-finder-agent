@@ -7,8 +7,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Tuple
 
-from .filters import (NOT_STATED, TOO_SENIOR, WITHIN, experience_bucket, has_excluded_word,
-                      location_matches, parse_annual_pay, pay_from_text, shift_mentioned, title_matches)
+from .filters import (NOT_STATED, TOO_SENIOR, WITHIN, entry_level_title, experience_bucket, has_excluded_word,
+                      higher_level_title, location_matches, parse_annual_pay, pay_from_text, shift_mentioned,
+                      title_matches)
 from .models import Job
 from .sources import SourceError
 from .textutil import norm, parse_dt
@@ -19,6 +20,7 @@ DEFAULT_SETTINGS = {
     "max_experience_years": 1,
     "preferred_locations": ["Hyderabad", "Remote"],
     "location_mode": "prefer",          # "prefer" ranks higher, "require" drops other places
+    "remote_country": "India",          # "Remote" in your cities means remote in this country (empty: anywhere)
     "pay_currency": "INR",              # INR or USD; pay in another currency is never compared
     "min_annual_pay": None,             # full yearly amount, e.g. 300000 for 3 LPA. None means no minimum
     "max_annual_pay": None,             # optional upper end of your range. None means no maximum
@@ -73,6 +75,9 @@ def profile_files(directory: str) -> List[Path]:
 
 def is_backup(path) -> bool:
     return Path(path).name.lower().endswith(".backup.json")
+
+
+BUCKET_LABELS = {0: "Within your range", 1: "Entry-level title (years not stated)", 2: "Not stated (review)"}
 
 
 class ProfileError(Exception):
@@ -151,7 +156,7 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
             if not candidates:
                 stats["title_mismatch"] += 1
                 continue
-            if has_excluded_word(job.title, cfg["exclude_title_words"]):
+            if has_excluded_word(job.title, cfg["exclude_title_words"]) or higher_level_title(job.title):
                 stats["senior_title"] += 1
                 continue
 
@@ -160,8 +165,10 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
             if bucket == TOO_SENIOR:
                 stats["too_senior"] += 1
                 continue
+            # 0: years stated and within range, 1: years not stated but the title says entry level, 2: not stated
+            level = 0 if bucket == WITHIN else (1 if entry_level_title(job.title) else 2)
 
-            loc_ok = location_matches(job.location, cfg["preferred_locations"])
+            loc_ok = location_matches(job.location, cfg["preferred_locations"], cfg["remote_country"])
             if cfg["location_mode"] == "require" and not loc_ok:
                 stats["location_dropped"] += 1
                 continue
@@ -201,7 +208,7 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
                 "Posted": posted.date().isoformat(),
                 "Date basis": basis,
                 "Experience": exp_text or "Not stated",
-                "Experience bucket": "Within your range" if bucket == WITHIN else "Not stated (review)",
+                "Experience bucket": BUCKET_LABELS[level],
                 "Fit %": "" if pct is None else pct,
                 "Matched skills": ", ".join(matched),
                 "Missing skills": ", ".join(missing),
@@ -213,7 +220,7 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
                 "Company email": company.get("email", ""),
                 "Founder X handle": company.get("x_handle", ""),
                 "Platform": job.platform,
-                "_sort": (0 if bucket == WITHIN else 1,
+                "_sort": (level,
                           pay_tier,
                           0 if loc_ok else 1,
                           0 if shift_mentioned(text) else 1,

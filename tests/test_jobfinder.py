@@ -773,5 +773,97 @@ class TwoTrackTests(unittest.TestCase):
             self.assertIn("=== Track 'seo'", out.getvalue())
 
 
+class DiscoveryTests(unittest.TestCase):
+    """Location first: job links found by searching for your city become companies to watch."""
+
+    def test_links_become_boards(self):
+        from jobfinder.discover import extract_boards
+        text = ("https://jobs.lever.co/keyloop/4f2a/apply  https://job-boards.greenhouse.io/groww/jobs/1 "
+                "boards.greenhouse.io/embed/job_board?for=druva  https://jobs.ashbyhq.com/sarvam/c04?x=1 "
+                "jobs.lever.co/leverdemo/x  https://jobs.lever.co/keyloop/other  https://jobs.eu.lever.co/foo/1")
+        self.assertEqual(extract_boards(text), [("lever", "keyloop"), ("greenhouse", "groww"),
+                                                ("greenhouse", "druva"), ("ashby", "sarvam")])
+
+    def test_check_board_counts_jobs_in_your_cities(self):
+        from jobfinder.discover import check_board
+        result = check_board("lever", "beta", ["Hyderabad"], fake_fetch)
+        self.assertEqual((result["jobs"], result["in_your_cities"]), (2, 1))
+        self.assertFalse(check_board("lever", "nope", ["Hyderabad"], fake_fetch)["ok"])
+
+    def test_add_command_appends_only_companies_with_jobs_in_your_cities(self):
+        import contextlib
+        import io
+        from unittest import mock
+        from jobfinder import cli
+        with tempfile.TemporaryDirectory() as tmp:
+            companies = os.path.join(tmp, "companies.csv")
+            with open(companies, "w") as handle:
+                handle.write("# comment\nname,platform,board,email,x_handle\nAcme,greenhouse,acme,,\n")
+            settings = os.path.join(tmp, "settings.json")
+            with open(settings, "w") as handle:
+                json.dump({"preferred_locations": ["Hyderabad"], "request_delay_seconds": 0}, handle)
+            links = ("https://boards.greenhouse.io/acme/jobs/1 https://jobs.lever.co/beta/abc "
+                     "https://jobs.ashbyhq.com/gamma/x1 https://jobs.lever.co/doesnotexist/1")
+            out = io.StringIO()
+            with mock.patch.object(cli, "fetch_board", fake_fetch), contextlib.redirect_stdout(out):
+                code = cli.main(["add", links, "--companies", companies, "--settings", settings, "--yes"])
+            self.assertEqual(code, 0)
+            boards = {(r["platform"], r["board"]) for r in read_companies(companies)}
+            self.assertEqual(boards, {("greenhouse", "acme"), ("lever", "beta"), ("ashby", "gamma")})
+            self.assertIn("Already in", out.getvalue())                    # acme was not added twice
+            self.assertIn("could not read", out.getvalue())                # the wrong board is reported
+
+    def test_certificate_problem_gives_a_clear_message(self):
+        import ssl
+        import urllib.error
+        from unittest import mock
+        from jobfinder import sources
+        failure = urllib.error.URLError(ssl.SSLCertVerificationError("unable to get local issuer certificate"))
+        with mock.patch("urllib.request.urlopen", side_effect=failure):
+            with self.assertRaises(SourceError) as caught:
+                sources.http_get_json("https://example.com")
+        self.assertIn("certificate", str(caught.exception))
+        self.assertIn("pip install certifi", str(caught.exception))
+
+
+class RemoteLocationTests(unittest.TestCase):
+    def test_remote_means_remote_in_your_country(self):
+        wanted = ["Hyderabad", "Remote"]
+        for location, expected in [("Remote, United States", False), ("Tokyo, Japan (Remote)", False),
+                                   ("Remote", True), ("Remote - India", True), ("Bengaluru (Remote)", True),
+                                   ("Hyderabad", True), ("Pune", False)]:
+            self.assertEqual(filters.location_matches(location, wanted), expected, location)
+        self.assertTrue(filters.location_matches("Remote, United States", wanted, remote_country=""))
+
+
+class EntryLevelTests(unittest.TestCase):
+    def test_entry_and_higher_level_titles(self):
+        self.assertTrue(filters.entry_level_title("Product Manager I"))
+        self.assertTrue(filters.entry_level_title("Junior SEO Executive"))
+        self.assertTrue(filters.entry_level_title("Associate - Founder's Office"))
+        self.assertFalse(filters.entry_level_title("Product Manager"))
+        self.assertTrue(filters.entry_level_title("Product Manager I, Growth"))
+        self.assertFalse(filters.entry_level_title("Lead IBM i (AS/400) Infrastructure Design Engineer"))
+        self.assertFalse(filters.entry_level_title("Product Support Consultant - L1/L2 Client"))
+        self.assertTrue(filters.higher_level_title("Product Manager II"))
+        self.assertFalse(filters.higher_level_title("Product Manager I"))
+        self.assertTrue(filters.title_matches("Product Manager I", VOCAB.title_phrases("Associate Product Manager")))
+
+    def test_entry_title_ranks_between_stated_and_not_stated(self):
+        def job(job_id, title, text):
+            return Job("demo", "x", "X", job_id, title, "Hyderabad", f"https://e/{job_id}", text, NOW)
+        jobs = [job("1", "Business Analyst", "Excel and SQL."),                  # nothing stated
+                job("2", "Associate Business Analyst", "Excel and SQL."),        # entry title, years not stated
+                job("3", "Business Analyst", "0-1 years of experience."),        # years stated
+                job("4", "Business Analyst II", "Excel."),                       # higher level: removed
+                job("5", "Product Manager I", "Roadmap.")]                       # entry PM title now matches
+        profile = {"name": "pm", "skills": ["SQL"], "titles": ["Business Analyst", "Associate Product Manager"]}
+        rows, stats, _ = run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], [profile], {}, VOCAB,
+                                      {"first_seen": {}, "dropped": {}}, lambda p, b, n: jobs, now=NOW)
+        self.assertEqual([r["Apply link"][-1] for r in rows], ["3", "2", "5", "1"])
+        self.assertEqual(rows[1]["Experience bucket"], "Entry-level title (years not stated)")
+        self.assertEqual(stats["senior_title"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

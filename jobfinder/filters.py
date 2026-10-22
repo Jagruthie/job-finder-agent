@@ -55,14 +55,54 @@ def title_matches(job_title: str, phrases: List[str]) -> bool:
     return any(has_phrase(title_norm, phrase) for phrase in phrases)
 
 
+# Words in a title that say "this is a beginner job": Associate, Junior, Trainee, Graduate, "Product Manager I".
+_ENTRY_WORDS = {"associate", "junior", "jr", "trainee", "graduate", "grad", "fresher", "freshers", "entry",
+                "apprentice", "intern"}
+# "Product Manager I" or "Product Manager 1, Growth", but not "IBM i" or "L1/L2 support".
+_ENTRY_LEVEL_MARK = re.compile(r"(?<![\w/])(?:I|1|L1)(?=\s*(?:$|[,(|–-]))")
+# Level marks for jobs above entry level, such as "Product Manager II".
+_HIGHER_LEVELS = {"ii", "iii", "iv", "l2", "l3", "l4"}
+
+
+def entry_level_title(job_title: str) -> bool:
+    return bool(set(norm(job_title).split()) & _ENTRY_WORDS or _ENTRY_LEVEL_MARK.search(job_title or ""))
+
+
+def higher_level_title(job_title: str) -> bool:
+    return bool(set(norm(job_title).split()) & _HIGHER_LEVELS)
+
+
 def has_excluded_word(job_title: str, words: List[str]) -> bool:
     title_norm = norm(job_title)
     return any(has_phrase(title_norm, norm(word)) for word in words)
 
 
-def location_matches(location: str, wanted: List[str]) -> bool:
+INDIA_PLACES = ["india", "bengaluru", "bangalore", "hyderabad", "mumbai", "delhi", "gurgaon", "gurugram", "noida",
+                "pune", "chennai", "kolkata", "ahmedabad", "telangana", "karnataka", "maharashtra"]
+_ANYWHERE = {"remote", "work", "from", "home", "anywhere", "worldwide", "global", "fully", "first"}
+
+
+def remote_in(location_norm: str, country: str) -> bool:
+    """A remote job counts only if it is remote in your country: it names the country or one of its
+    cities, or it just says 'Remote' or 'Anywhere'. 'Remote, United States' does not count for India."""
+    if not country:
+        return True
+    places = INDIA_PLACES if norm(country) == "india" else [norm(country)]
+    if any(has_phrase(location_norm, place) for place in places):
+        return True
+    return set(location_norm.split()) <= _ANYWHERE
+
+
+def location_matches(location: str, wanted: List[str], remote_country: str = "India") -> bool:
     location_norm = norm(location)
-    return any(norm(place) and norm(place) in location_norm for place in wanted)
+    for place in wanted:
+        place_norm = norm(place)
+        if place_norm == "remote":
+            if has_phrase(location_norm, "remote") and remote_in(location_norm, remote_country):
+                return True
+        elif place_norm and place_norm in location_norm:
+            return True
+    return False
 
 
 def shift_mentioned(text: str) -> bool:

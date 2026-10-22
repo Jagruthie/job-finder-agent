@@ -35,8 +35,8 @@ pip install -r requirements.txt
 #    One profile per resume, for example "pm" and "seo".
 python -m jobfinder setup
 
-# 2. Copy the companies file and add the companies you want to watch
-cp companies.example.csv companies.csv
+# 2. Add companies hiring in your city (see "Find companies hiring near you" below)
+python -m jobfinder add "https://jobs.lever.co/acme/123"
 
 # 3. Run it (daily is a good rhythm)
 python -m jobfinder run          # every profile in profiles/, one track each
@@ -44,7 +44,27 @@ python -m jobfinder run          # every profile in profiles/, one track each
 
 On Windows, use `copy` instead of `cp`.
 
-To add a company, open its careers page and look at the link. `boards.greenhouse.io/acme` means platform `greenhouse`, board `acme`. `jobs.lever.co/acme` means `lever`. `jobs.ashbyhq.com/acme` means `ashby`.
+## Find companies hiring near you (location first)
+
+Guessing company names finds few jobs in your city. It works much better to start from jobs that are already in your city, then add the companies behind them.
+
+1. Search the web yourself, for example (change the city and words):
+   - `site:jobs.lever.co Hyderabad`
+   - `site:boards.greenhouse.io Hyderabad` and `site:job-boards.greenhouse.io Hyderabad`
+   - `site:jobs.ashbyhq.com Hyderabad`
+   - add role words to narrow it: `site:jobs.lever.co Hyderabad "product analyst"`
+2. Give the links to the agent. Paste them, or save the search results page and give the file:
+
+   ```bash
+   python -m jobfinder add "https://jobs.lever.co/acme/123" "https://boards.greenhouse.io/beta/jobs/9"
+   python -m jobfinder add ~/Downloads/search-results.html
+   ```
+
+   It finds every Greenhouse, Lever and Ashby link, reads each company's public job list once, shows how many jobs are in your cities, and asks before adding the ones with jobs there to `companies.csv`. Use `--all` to also add companies with jobs elsewhere.
+
+The agent does not run web searches by itself, because search engines do not allow automated searching. Only Greenhouse, Lever and Ashby links can be added; EU-hosted boards (`jobs.eu.lever.co`, `boards.eu.greenhouse.io`) are not supported yet.
+
+You can also add a company by hand: `boards.greenhouse.io/acme` means platform `greenhouse`, board `acme`. `jobs.lever.co/acme` means `lever`. `jobs.ashbyhq.com/acme` means `ashby`.
 
 ## Reading the CSV
 
@@ -53,7 +73,7 @@ To add a company, open its careers page and look at the link. `boards.greenhouse
 | Rank / Track | Results are grouped by track (one per profile, such as pm and seo), best first inside each track. Rank restarts at 1 for each track. A job that fits two tracks appears once, in the track whose skills fit it better |
 | Apply link | The exact page where you apply |
 | Posted / Date basis | The platform's date, or "first seen" when the platform gives none. First-seen dates start counting on your first run, so their real age is unknown |
-| Experience bucket | "Within your range" means the posting states a number that fits your setting. "Not stated (review)" means the posting gave no number, so read it |
+| Experience bucket | "Within your range": the posting states years that fit your setting. "Entry-level title (years not stated)": no years given, but the title says Associate, Junior, Trainee, Graduate or "I" (as in Product Manager I). "Not stated (review)": no years and no sign either way, so read it. Ranked in that order. Titles marked II, III or IV are removed as above entry level |
 | Fit % | Share of the skills the job mentions that are on your profile. Only skills in `data/skills.json` are counted |
 | Missing skills | Skills the job mentions that are not on your profile |
 | Location match / Shift | Preferences only. They raise a job's rank and never remove it |

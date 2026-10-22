@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List
 
 from .demo import demo_data
+from .discover import append_companies, check_board, extract_boards, known_boards
 from .pipeline import (DEFAULT_SETTINGS, ProfileError, clean_list, clean_locations, is_backup, load_state,
                        profile_files, read_companies, run_pipeline, save_state, write_csv)
 from .resume import read_resume_text
@@ -96,6 +97,50 @@ def print_preview(rows: List[dict], profiles=()) -> None:
         print(f"   missing: {row['Missing skills'] or '-'}")
         print(f"   pay: {row['Pay']} ({row['Pay check']}) | email: {row['Company email'] or '-'} | X: {row['Founder X handle'] or '-'}")
         print(f"   apply: {row['Apply link']}")
+
+
+def cmd_add(args) -> int:
+    """Turn job links (or a saved page of search results) into companies to watch."""
+    text = []
+    for item in args.links:
+        file = Path(item).expanduser()
+        text.append(file.read_text(encoding="utf-8", errors="ignore") if file.is_file() else item)
+    boards = extract_boards("\n".join(text))
+    if not boards:
+        print("No Greenhouse, Lever or Ashby job links found. Links look like jobs.lever.co/acme, "
+              "boards.greenhouse.io/acme or jobs.ashbyhq.com/acme.")
+        return 1
+    known = known_boards(args.companies)
+    new = [pair for pair in boards if pair not in known]
+    if len(new) < len(boards):
+        print(f"Already in {args.companies}: {', '.join(b for p, b in boards if (p, b) in known)}")
+    settings = load_settings(args.settings)
+    preferred = settings["preferred_locations"]
+    print(f"Checking {len(new)} companies' public job lists ({', '.join(preferred)} = your cities)...")
+    results = []
+    for index, (platform, board) in enumerate(new):
+        if index:
+            time.sleep(settings["request_delay_seconds"])
+        result = check_board(platform, board, preferred, fetch_board, settings["remote_country"])
+        results.append(result)
+        if result["ok"]:
+            print(f"  {board} ({platform}): {result['jobs']} jobs, {result['in_your_cities']} in your cities, "
+                  f"{result['in_india']} in India or remote")
+        else:
+            print(f"  {board} ({platform}): could not read ({result['error']})")
+    wanted = [r for r in results if r["ok"] and (r["in_your_cities"] or (args.all and r["jobs"]))]
+    if not wanted:
+        print("\nNone of these has open jobs in your cities, so nothing was added. "
+              "Use --all to add companies with jobs anywhere.")
+        return 0
+    print(f"\nTo add: {', '.join(r['board'] for r in wanted)}")
+    answer = "yes" if args.yes else input(f"Add these {len(wanted)} to {args.companies}? (yes or no) [yes]: ")
+    if answer.strip().lower() not in ("", "y", "yes"):
+        print("Nothing was added.")
+        return 0
+    append_companies(args.companies, wanted)
+    print(f"Added {len(wanted)} companies to {args.companies}. Open it to fix a company name if you like.")
+    return 0
 
 
 def cmd_setup(args) -> int:
@@ -190,6 +235,14 @@ def main(argv=None) -> int:
     p_profile.add_argument("--name", required=True, help="short name for this profile, e.g. pm or seo")
     p_profile.add_argument("--out-dir", default="profiles")
     p_profile.set_defaults(func=cmd_profile)
+
+    p_add = sub.add_parser("add", help="add companies from job links or a saved page of search results")
+    p_add.add_argument("links", nargs="+", help="job or careers links, or a file (for example a saved web page)")
+    p_add.add_argument("--companies", default="companies.csv")
+    p_add.add_argument("--settings", default="settings.json")
+    p_add.add_argument("--all", action="store_true", help="also add companies with no jobs in your cities")
+    p_add.add_argument("--yes", action="store_true", help="add without asking")
+    p_add.set_defaults(func=cmd_add)
 
     p_setup = sub.add_parser("setup", help="answer a few questions to set roles, location, experience and pay")
     p_setup.add_argument("--settings", default="settings.json")
