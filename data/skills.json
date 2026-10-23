@@ -1,5 +1,5 @@
 {
-  "_about": "Starter vocabulary. 'skills' maps a skill name to the words that mean it. 'titles' maps a role title to its category (used to group roles into tracks, such as PM or SEO), its other spellings and the skills that suggest it. 'deal_breakers' are groups of work a track can refuse (such as Coding). 'exact_case' skills match their name only in capitals ('GEO', not 'geo'). 'generic_skills' are broad skills (communication, research) that count for Fit % but never keep a job by themselves. Anyone can extend this file.",
+  "_about": "Other spellings only. Matching uses the skills and roles each person saved from their resume; this file never decides what is kept. 'skills' maps a skill to other words for it (PySpark for Apache Spark), 'titles' maps a role to other titles for it (HRBP for HR Business Partner) and is also used to spot role titles in resumes and to offer the right spelling of a mistyped role. 'deal_breakers' are groups of work a track can refuse (such as Coding). 'exact_case' skills match their name only in capitals ('GEO', not 'geo'). Anyone can extend this file.",
   "skills": {
     "Product Management": ["product management", "product manager", "product ownership", "product owner", "product builder", "pm equivalent", "product roadmap"],
     "Product Strategy": ["product strategy"],
@@ -49,7 +49,7 @@
     "Research": ["research", "researching"],
     "Financial Modeling": ["financial modeling", "financial modelling", "budgeting", "forecasting"],
     "Documentation": ["documentation", "technical writing", "documenting"],
-    "Recruiting": ["recruiting", "recruitment", "hiring", "onboarding"],
+    "Recruiting": ["recruiting", "recruitment", "hiring", "recruiter", "end to end recruitment", "interview scheduling"],
     "JavaScript": ["javascript", "typescript", "node js", "nodejs"],
     "React/Next.js": ["react", "next js", "nextjs"],
     "Git/GitHub": ["github", "git"],
@@ -84,7 +84,20 @@
     "Docker/Kubernetes": ["docker", "kubernetes", "k8s"],
     "CI/CD": ["ci/cd", "ci cd", "jenkins", "github actions"],
     "Terraform": ["terraform", "infrastructure as code"],
-    "Data Governance": ["data governance", "data quality", "data lineage", "data catalog"]
+    "Data Governance": ["data governance", "data quality", "data lineage", "data catalog"],
+    "Talent Acquisition": ["talent acquisition", "candidate sourcing", "sourcing candidates", "campus hiring", "headhunting"],
+    "Onboarding": ["onboarding", "induction", "new hire orientation"],
+    "Applicant Tracking": ["applicant tracking", "applicant tracking system", "ats", "naukri rms", "linkedin recruiter", "icims", "smartrecruiters"],
+    "HR Operations": ["hr operations", "hr ops", "people operations", "people ops", "hr shared services"],
+    "HRMS": ["hrms", "hris", "workday", "successfactors", "darwinbox", "keka", "greythr", "bamboohr"],
+    "Payroll": ["payroll", "payroll processing"],
+    "Labour Law Compliance": ["labour laws", "labour law", "labor laws", "labor law", "statutory compliance", "pf", "esi", "posh", "gratuity"],
+    "Employee Relations": ["employee relations", "grievance handling", "disciplinary"],
+    "Employee Engagement": ["employee engagement", "engagement surveys", "engagement activities"],
+    "Performance Management": ["performance management", "performance reviews", "performance appraisal", "appraisals"],
+    "Compensation & Benefits": ["compensation and benefits", "comp and ben", "benefits administration", "total rewards", "compensation planning"],
+    "Learning & Development": ["learning and development", "l&d", "training and development", "training programs"],
+    "HR Analytics": ["hr analytics", "people analytics", "hr metrics", "attrition analysis"]
   },
   "deal_breakers": {
     "Coding": {
@@ -167,7 +180,6 @@
     }
   },
   "exact_case": ["GEO"],
-  "generic_skills": ["Research", "Presentation", "Communication", "Documentation", "Excel/Sheets", "AI Tools", "Strategy", "Prioritization", "Zero-to-One", "Cross-functional Leadership", "Stakeholder Management", "Agile", "Operations"],
   "titles": {
     "Associate Product Manager": {
       "category": "Product & Strategy",
@@ -268,6 +280,36 @@
       "category": "Data & Engineering",
       "aliases": ["cloud engineer", "site reliability engineer", "sre", "platform engineer", "devops"],
       "skills": ["AWS", "Azure", "GCP", "Docker/Kubernetes", "Terraform", "CI/CD", "Linux", "Shell Scripting"]
+    },
+    "HR Executive": {
+      "category": "HR & People",
+      "aliases": ["hr generalist", "people generalist", "hr associate", "hr coordinator", "hr officer", "hr specialist", "hr analyst", "hr assistant", "hr intern", "human resources executive", "human resources associate", "human resources generalist"],
+      "skills": ["HR Operations", "Onboarding", "Employee Relations", "Employee Engagement", "HRMS", "Payroll", "Labour Law Compliance", "Recruiting"]
+    },
+    "Recruiter": {
+      "category": "HR & People",
+      "aliases": ["talent acquisition", "talent acquisition specialist", "talent acquisition executive", "talent acquisition associate", "technical recruiter", "tech recruiter", "it recruiter", "associate recruiter", "recruitment executive", "recruitment consultant", "recruiting coordinator", "talent sourcer", "sourcer", "campus recruiter"],
+      "skills": ["Recruiting", "Talent Acquisition", "Applicant Tracking", "Onboarding", "HRMS"]
+    },
+    "HR Business Partner": {
+      "category": "HR & People",
+      "aliases": ["hrbp", "people partner", "people business partner"],
+      "skills": ["Employee Relations", "Performance Management", "Employee Engagement", "HR Analytics", "Compensation & Benefits", "HR Operations", "Stakeholder Management"]
+    },
+    "Payroll Specialist": {
+      "category": "HR & People",
+      "aliases": ["payroll executive", "payroll analyst", "payroll associate", "payroll coordinator", "payroll operations"],
+      "skills": ["Payroll", "Labour Law Compliance", "HRMS", "Compensation & Benefits", "Excel/Sheets"]
+    },
+    "People Operations": {
+      "category": "HR & People",
+      "aliases": ["people operations", "people ops", "hr operations", "hr shared services", "people support", "hr onboarding", "onboarding specialist"],
+      "skills": ["HR Operations", "HRMS", "Onboarding", "Payroll", "HR Analytics", "Documentation"]
+    },
+    "Learning and Development Specialist": {
+      "category": "HR & People",
+      "aliases": ["learning and development", "l&d specialist", "learning specialist", "training specialist", "training coordinator"],
+      "skills": ["Learning & Development", "Performance Management", "Employee Engagement", "Presentation"]
     }
   }
 }

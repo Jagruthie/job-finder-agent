@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Callable, Dict, List, Tuple
 
 from .filters import (NOT_STATED, TOO_SENIOR, WITHIN, entry_level_title, experience_bucket, has_excluded_word,
-                      higher_level_title, in_country, location_matches, parse_annual_pay, pay_from_text, shift_mentioned,
-                      title_matches)
+                      higher_level_title, in_country, location_matches, parse_annual_pay, pay_from_text, shift_mentioned)
+from .match import Corpus, JobTerms, Query, score
 from .models import Job
 from .sources import SourceError
-from .textutil import has_phrase, norm, parse_dt
+from .textutil import norm, parse_dt
 from .vocab import Vocab
 
 DEFAULT_SETTINGS = {
@@ -32,16 +32,16 @@ DEFAULT_SETTINGS = {
     "max_annual_pay": None,             # optional upper end of your range. None means no maximum
     "pay_mode": "prefer",               # "prefer" ranks outside-range jobs lower, "require" drops jobs whose stated pay is outside your range
     "exclude_title_words": ["senior", "sr", "lead", "head", "director", "vp", "principal", "staff"],
-    # Keep a job whose title is not on your list when it asks for enough of your skills.
-    "match_by": "titles_or_skills",     # or "titles" to keep only jobs whose title is on your list
-    "skill_match_min": 3,               # at least this many of your skills in the job
-    "skill_match_share": 50,            # and at least this % of the skills the job mentions
+    # A job whose title is not one of your roles is kept when it scores at least this % of the day's best match
+    # for the track and names at least this many of your skills.
+    "match_share": 45,
+    "match_min_skills": 3,
     "request_delay_seconds": 1.5,
 }
 
 COLUMNS = [
     "Rank", "Track", "Company", "Role", "Matched by", "Apply link", "Posted", "Date basis",
-    "Experience", "Experience bucket", "Priority skills", "Deal-breaker check", "Fit %", "Matched skills",
+    "Experience", "Experience bucket", "Priority skills", "Deal-breaker check", "Match", "Matched skills",
     "Missing skills",
     "Location", "Location match", "Shift 10-6 mentioned", "Pay", "Pay check",
     "Company email", "Founder X handle", "Platform",
@@ -110,43 +110,32 @@ def save_state(path: str, state: dict) -> None:
 
 
 def prepare_profile(profile: dict, vocab: Vocab) -> dict:
-    phrases: List[str] = []
-    for title in clean_list(profile.get("titles", [])):
-        phrases.extend(vocab.title_phrases(title))
+    """A profile ready to screen with: the roles and skills you saved (from your resume, as you confirmed them)."""
+    titles = clean_list(profile.get("titles", []))
     skills = clean_list(profile.get("skills", []))
     avoid = [group for group in clean_list(profile.get("deal_breakers", [])) if group in vocab.deal_breakers]
     avoided_skills = {s for group in avoid for s in vocab.deal_breakers[group].get("skills", [])}
     priority = [s for s in clean_list(profile.get("priority_skills", [])) if s not in avoided_skills]
     skills += [s for s in priority if s not in skills]     # a priority skill is one of your skills, listed there or not
-    # Skills you confirmed that are not in data/skills.json are matched by their own words in the job text.
-    own = [(skill, norm(skill)) for skill in skills if skill not in vocab.skills and len(norm(skill)) >= 3]
-    # The specific skills this track is about: your priority skills, or else the skills your chosen roles need
-    # (from data/skills.json), without broad ones such as Research and without deal-breakers. A job kept for its
-    # skills alone must need 2 of these (or the only one, if there is one), so a PM track does not pick up
-    # developer jobs because you know Python.
-    core = set(priority) or {s for title in clean_list(profile.get("titles", []))
-                             for s in vocab.titles.get(title, {}).get("skills", [])} & set(skills)
-    core = core - vocab.generic - avoided_skills
-    return {**profile, "_phrases": sorted(set(phrases)), "_skills": set(skills), "_own_skills": own,
-            "_core": core, "_core_needed": min(2, len(core)), "_priority": priority, "_avoid": avoid}
+    phrases = sorted({phrase for title in titles for phrase in vocab.synonyms(title)})
+    return {**profile, "_titles": titles, "_skill_list": skills, "_skills": set(skills), "_phrases": phrases,
+            "_priority": priority, "_avoid": avoid, "_query": Query(titles, skills, priority, vocab)}
 
 
-def common_skills(found_per_job: List[List[str]], share: float = 0.2, minimum_jobs: int = 20) -> set:
-    """Skills mentioned in more than `share` of the jobs, when there are enough jobs to tell."""
-    if len(found_per_job) < minimum_jobs:
-        return set()
-    counts = Counter(skill for found in found_per_job for skill in set(found))
-    return {skill for skill, count in counts.items() if count > share * len(found_per_job)}
-
-
-def skill_fit(profile: dict, found: List[str], text_norm: str, ignore: frozenset = frozenset()):
-    """(skills of yours the job mentions, skills it mentions that you lack, % of its skills you have).
-    Skills in `ignore` are left out of all three."""
-    found = found + [skill for skill, key in profile["_own_skills"] if has_phrase(text_norm, key)]
-    found = [skill for skill in found if skill not in ignore]
-    matched = [s for s in found if s in profile["_skills"]]
-    missing = [s for s in found if s not in profile["_skills"]]
-    return matched, missing, (round(100 * len(matched) / len(found)) if found else None)
+def pay_check(job: Job, cfg: dict) -> Tuple[str, str, int]:
+    """(the stated pay, how it compares with yours, 0 within / 1 unknown / 2 outside your range)."""
+    pay_text = job.pay_text or pay_from_text(job.description) or ""
+    annual = parse_annual_pay(pay_text, cfg["pay_currency"])
+    min_pay, max_pay = cfg.get("min_annual_pay"), cfg.get("max_annual_pay")
+    if min_pay is None and max_pay is None:
+        return pay_text, "No pay range set", 1
+    if annual is None:
+        return pay_text, "Not stated or not comparable", 1
+    if min_pay is not None and annual[1] < min_pay:
+        return pay_text, "Below your range", 2
+    if max_pay is not None and annual[0] > max_pay:
+        return pay_text, "Above your range", 2
+    return pay_text, "Within your range", 0
 
 
 def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vocab: Vocab,
@@ -155,19 +144,16 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
     now = now or datetime.now(timezone.utc)
     cfg = {**DEFAULT_SETTINGS, **settings}
     prepared = [prepare_profile(p, vocab) for p in profiles]
-    by_skills = cfg["match_by"] != "titles"
     for profile in prepared:
-        if not profile["_phrases"] and not (by_skills and len(profile["_skills"]) >= cfg["skill_match_min"]):
+        if not profile["_titles"] and not profile["_skill_list"]:
             raise ProfileError(
-                f"Stopped: profile '{profile.get('name', '?')}' has no usable roles"
-                + (f" and fewer than {cfg['skill_match_min']} skills" if by_skills else "")
-                + ", so no jobs were screened. (Empty lists and words such as 'keep' do not count.) "
-                "Run 'python -m jobfinder setup' to set its roles and skills, or edit its file.")
+                f"Stopped: profile '{profile.get('name', '?')}' has no roles and no skills, so there is nothing to "
+                "match jobs against. (Empty lists and words such as 'keep' do not count.) "
+                "Run 'python -m jobfinder setup' and give your resume, or edit its file.")
     first_seen: Dict[str, str] = state.setdefault("first_seen", {})
     dropped: Dict[str, str] = state.setdefault("dropped", {})
     stats: Counter = Counter()
     failures: List[str] = []
-    rows: List[dict] = []
     max_age = timedelta(days=cfg["freshness_days"])
 
     # Pass 1: read every company and keep the fresh jobs.
@@ -203,134 +189,105 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
                 stats["already_dropped" if remembered is not None else "stale_dropped"] += 1
                 continue
             dropped.pop(job.key, None)
-            text = f"{job.title}. {job.description}"
-            fresh.append((company, job, posted, basis, text, vocab.extract_skills(text)))
+            fresh.append((company, job, posted, basis, JobTerms(job.title, job.description)))
 
-    # Skills found in a large share of this run's jobs are boilerplate (hiring notices, "communication"),
-    # so they do not count when keeping a job for its skills alone.
-    common = common_skills([found for *_, found in fresh])
+    # How rare each word is is learned from all of today's fresh jobs, so boilerplate weighs almost nothing.
+    corpus = Corpus([terms for *_, terms in fresh])
 
-    # Pass 2: screen each fresh job.
-    for company, job, posted, basis, text, found in fresh:
-        text_norm = norm(text)
-        fits = {p["name"]: skill_fit(p, found, text_norm) for p in prepared}
-        candidates = [p for p in prepared if title_matches(job.title, p["_phrases"])]
-        matched_by = "role title"
-        if not candidates and by_skills:
-            # Skills in the company's own name (Git at GitLab) say nothing about the job either.
-            ignore = common | vocab.skills_in_name(job.company) | vocab.generic
-            specific = {}
-            for profile in prepared:
-                matched, _, pct = skill_fit(profile, found, text_norm, ignore)
-                on_track = len(profile["_core"] & set(matched)) >= profile["_core_needed"]
-                if len(matched) >= cfg["skill_match_min"] and (pct or 0) >= cfg["skill_match_share"] and on_track:
-                    candidates.append(profile)
-                    specific[profile["name"]] = matched
-            matched_by = "skills"
-        if not candidates:
-            stats["title_mismatch"] += 1
-            continue
-        # Deal-breakers: a track that refuses some work (such as Coding) drops jobs that depend on it.
-        breaker_terms: Dict[str, List[str]] = {}
-        for profile in list(candidates):
-            for group in profile["_avoid"]:
-                terms = breaker_terms.setdefault(group, vocab.deal_breaker_terms(group, text))
-                if vocab.deal_breaker_title(group, job.title) or len(terms) >= cfg["deal_breaker_remove"]:
-                    candidates.remove(profile)
-                    break
-        if not candidates:
-            stats["deal_breaker"] += 1
-            continue
-        role_phrases = [phrase for profile in candidates for phrase in profile["_phrases"]]
-        # With 3 or more years, a "Senior" title is often within reach; the years the post asks for decide.
-        excluded = [word for word in cfg["exclude_title_words"]
-                    if not (cfg["max_experience_years"] >= 3 and norm(word) in ("senior", "sr"))]
+    # Pass 2: the hard rules (years, place, pay, deal-breakers), then how well each job fits each track.
+    role_phrases = [phrase for profile in prepared for phrase in profile["_phrases"]]
+    # With 3 or more years, a "Senior" title is often within reach; the years the post asks for decide.
+    excluded = [word for word in cfg["exclude_title_words"]
+                if not (cfg["max_experience_years"] >= 3 and norm(word) in ("senior", "sr"))]
+    scored = []
+    for company, job, posted, basis, terms in fresh:
+        text = f"{job.title}. {job.description}"
         if (has_excluded_word(job.title, excluded, role_phrases)
                 or higher_level_title(job.title, cfg["max_experience_years"])):
             stats["senior_title"] += 1
             continue
-
         bucket, exp_text = experience_bucket(text, cfg["max_experience_years"])
         if bucket == TOO_SENIOR:
             stats["too_senior"] += 1
             continue
-        # 0: years stated and within range, 1: years not stated but the title says entry level, 2: not stated
-        level = 0 if bucket == WITHIN else (1 if entry_level_title(job.title) else 2)
-
         loc_ok = location_matches(job.location, cfg["preferred_locations"], cfg["remote_country"])
-        # A job kept only for its skills must be in your cities: that wider net needs a tighter place.
         # "Keep jobs in other cities" means other cities of your country (remote_country), not abroad.
-        if ((cfg["location_mode"] == "require" or matched_by == "skills") and not loc_ok
-                or not in_country(job.location, cfg["remote_country"])):
+        if cfg["location_mode"] == "require" and not loc_ok or not in_country(job.location, cfg["remote_country"]):
             stats["location_dropped"] += 1
             continue
-
-        pay_text = job.pay_text or pay_from_text(job.description) or ""
-        annual = parse_annual_pay(pay_text, cfg["pay_currency"])
-        min_pay, max_pay = cfg.get("min_annual_pay"), cfg.get("max_annual_pay")
-        if min_pay is None and max_pay is None:
-            pay_check, pay_tier = "No pay range set", 1
-        elif annual is None:
-            pay_check, pay_tier = "Not stated or not comparable", 1
-        elif min_pay is not None and annual[1] < min_pay:
-            pay_check, pay_tier = "Below your range", 2
-        elif max_pay is not None and annual[0] > max_pay:
-            pay_check, pay_tier = "Above your range", 2
-        else:
-            pay_check, pay_tier = "Within your range", 0
+        pay_text, pay_label, pay_tier = pay_check(job, cfg)
         if cfg["pay_mode"] == "require" and pay_tier == 2:
             stats["pay_dropped"] += 1
             continue
+        fits, breakers = {}, {}
+        for profile in prepared:
+            # Deal-breakers: a track that refuses some work (such as Coding) drops jobs that depend on it.
+            refused = False
+            for group in profile["_avoid"]:
+                found = breakers.setdefault(group, vocab.deal_breaker_terms(group, text))
+                refused = refused or vocab.deal_breaker_title(group, job.title) or len(found) >= cfg["deal_breaker_remove"]
+            if not refused:
+                fits[profile["name"]] = score(profile["_query"], terms, corpus)
+        if not fits:
+            stats["deal_breaker"] += 1
+            continue
+        scored.append((company, job, posted, basis, text, bucket, exp_text, loc_ok, pay_text, pay_label, pay_tier,
+                       fits, breakers))
 
-        # The track whose own direction this job fits best wins (its priority skills, or its roles' skills),
-        # then the higher Fit %.
-        def track_score(profile):
-            matched, _, pct = fits[profile["name"]]
-            return (len(set(matched) & profile["_core"]), pct if pct is not None else -1)
-        chosen = max(candidates, key=track_score)
-        track = chosen["name"]
-        matched, missing, pct = fits[track]
-        priority_hit = [s for s in matched if s in chosen["_priority"]]
-        flags = [f"mentions {group.lower()}: {', '.join(breaker_terms[group])}" for group in chosen["_avoid"]
-                 if len(breaker_terms.get(group, [])) >= cfg["deal_breaker_flag"]]
-        if matched_by == "skills":
-            matched_by = f"skills: {', '.join(specific[track])}"
-            stats["kept_by_skills"] += 1
+    # A strong match: its title names one of your roles, or it scores close to today's best match for the track
+    # and names enough of your skills.
+    best = {p["name"]: max((s[11][p["name"]][0] for s in scored if p["name"] in s[11]), default=0.0) for p in prepared}
 
+    def strong(name, fit):
+        value, titles_named, skills_named = fit
+        return value > 0 and (bool(titles_named) or (
+            value >= cfg["match_share"] / 100 * best[name] and len(skills_named) >= cfg["match_min_skills"]))
+
+    rows: List[dict] = []
+    for company, job, posted, basis, text, bucket, exp_text, loc_ok, pay_text, pay_label, pay_tier, fits, breakers \
+            in scored:
+        tracks = [name for name, fit in fits.items() if strong(name, fit)]
+        if not tracks:
+            stats["weak_match"] += 1
+            continue
+        # The track this job fits best, compared with each track's own best match today.
+        track = max(tracks, key=lambda name: fits[name][0] / best[name])
+        chosen = next(p for p in prepared if p["name"] == track)
+        value, titles_named, skills_named = fits[track]
+        flags = [f"mentions {group.lower()}: {', '.join(breakers[group])}" for group in chosen["_avoid"]
+                 if len(breakers.get(group, [])) >= cfg["deal_breaker_flag"]]
+        level = 0 if bucket == WITHIN else (1 if entry_level_title(job.title) else 2)
+        missing = [s for s in vocab.extract_skills(text) if s not in chosen["_skills"]][:6]
         rows.append({
             "Track": track,
             "Company": job.company,
             "Role": job.title,
-            "Matched by": matched_by,
+            "Matched by": f"your role: {', '.join(titles_named)}" if titles_named else "your skills",
             "Apply link": job.url,
             "Posted": posted.date().isoformat(),
             "Date basis": basis,
             "Experience": exp_text or "Not stated",
             "Experience bucket": BUCKET_LABELS[level],
-            "Priority skills": ", ".join(priority_hit),
+            "Priority skills": ", ".join(s for s in skills_named if s in chosen["_priority"]),
             "Deal-breaker check": "; ".join(flags),
-            "Fit %": "" if pct is None else pct,
-            "Matched skills": ", ".join(matched),
+            "Match": round(100 * value / best[track]),
+            "Matched skills": ", ".join(skills_named),
             "Missing skills": ", ".join(missing),
             "Location": job.location,
             "Location match": "yes" if loc_ok else "no",
             "Shift 10-6 mentioned": "yes" if shift_mentioned(text) else "",
             "Pay": pay_text or "Not stated",
-            "Pay check": pay_check,
+            "Pay check": pay_label,
             "Company email": company.get("email", ""),
             "Founder X handle": company.get("x_handle", ""),
             "Platform": job.platform,
-            "_sort": (level,
-                      0 if matched_by == "role title" else 1,
-                      1 if flags else 0,
-                      -len(priority_hit),
-                      pay_tier,
-                      0 if loc_ok else 1,
-                      0 if shift_mentioned(text) else 1,
-                      -(pct if pct is not None else -1),
+            # Best match first. A job in another city, with pay outside your range, or flagged by a deal-breaker
+            # ranks a quarter lower for each, so a strong match elsewhere still beats a weak one in your city.
+            "_sort": (-value * 0.75 ** ((0 if loc_ok else 1) + (1 if pay_tier == 2 else 0) + (1 if flags else 0)),
                       -posted.timestamp()),
         })
         stats["kept"] += 1
+        stats["kept_by_skills" if not titles_named else "kept_by_title"] += 1
         if bucket == NOT_STATED:
             stats["kept_experience_not_stated"] += 1
 

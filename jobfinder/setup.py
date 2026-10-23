@@ -1,5 +1,5 @@
 """Interactive terminal setup: asks a few questions, reads your resume, and writes settings.json
-and one profile per resume (the skills you confirm, and the roles that need those skills).
+and one profile per resume (the skills and roles found in it, as you confirm them).
 
 Press Enter to keep the value shown in [brackets]. Type 'none' to clear an optional value.
 """
@@ -142,75 +142,38 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
     if not files:
         say("\nNo profiles yet. Run setup again and give the path to your resume to make one.")
         return out
-    say("\nSkills and roles to look for, per profile. Each profile is one track, for example PM or SEO.")
-    # (profile file, skills already confirmed for a track split off another profile, its categories)
-    queue = [(file, None, None) for file in files]
-    taken = set(files)
-    while queue:
-        file, split_skills, split_categories = queue.pop(0)
+    say("\nSkills and roles to look for, per profile. Each profile is one track; give another resume for another "
+        "kind of job. Every day, each job is compared with these: its title with your roles, its text with your "
+        "skills (other spellings, such as PySpark for Spark, count too).")
+    for file in files:
         profile = json.loads(file.read_text(encoding="utf-8")) if file.exists() else {"name": file.stem}
         saved_skills, saved_titles = profile.get("skills", []), profile.get("titles", [])
         skills, titles = clean_list(saved_skills), clean_list(saved_titles)
         name = profile.get("name", file.stem)
         say(f"\nProfile '{name}'")
-        resume_roles = from_resume[file][1] if file in from_resume and split_skills is None else []
-        if split_skills is not None:
-            new_skills = split_skills
-            say(f"  Uses the same skills, and searches: {', '.join(split_categories)}")
-        else:
-            if file in from_resume:
-                skills, hint = from_resume[file][0], "Enter accepts these"
-                say("  Skills found in your resume:")
-            else:
-                hint = "Enter keeps these"
-            new_skills = _ask_profile_list(ask, say, "Skills", skills, hint, "SEO, Keyword Research", required=False)
-            unknown = [s for s in new_skills if s not in vocab.skills]
-            if unknown:
-                say("  Your own skills, matched by their exact words in job posts (no file to edit): "
-                    + ", ".join(unknown))
-        if resume_roles:
-            say(f"  Roles named in your resume: {', '.join(resume_roles)}")
-        # Roles come from the confirmed skills (each needs at least 2 of them), grouped by category. The category
-        # of the roles you already chose, or that your resume names, comes first.
-        groups = vocab.role_groups(new_skills)
-        preferred = [vocab.category(t) for t in titles + resume_roles if t in vocab.titles]
-        groups.sort(key=lambda group: preferred.index(group[0]) if group[0] in preferred else len(preferred))
-        if groups:
-            chosen = split_categories or _ask_categories(ask, say, name, groups)
-            default = [title for category, matches in groups if category in chosen for title, _, _ in matches]
-            default = list(dict.fromkeys(
-                [r for r in resume_roles if r not in vocab.titles or vocab.category(r) in chosen] + default))
+        if file in from_resume:
+            skills, roles = from_resume[file]
             hint = "Enter accepts these"
-            others = [category for category, _ in groups if category not in chosen]
-            if others and split_skills is None:
-                split = _ask_split_track(ask, say, others, Path(profiles_dir), taken)
-                if split:
-                    taken.add(split)
-                    queue.append((split, new_skills, others))
-        elif resume_roles:
-            default, hint = resume_roles, "Enter accepts these"
+            say("  Skills found in your resume:")
         else:
-            say("  None of the built-in roles needs 2 or more of these skills.")
-            default, hint = titles, "Enter keeps these"
-        # With matching by skills, a track may have no roles: it then keeps jobs that ask for enough of its skills.
-        skills_only_ok = out["match_by"] != "titles" and len(new_skills) >= out["skill_match_min"]
-        if not default and skills_only_ok:
-            say(f"  You can type the roles you want, or press Enter to leave them empty: this track will then keep "
-                f"jobs in your cities that ask for at least {out['skill_match_min']} of your skills.")
-            hint = "Enter leaves them empty"
-        if titles and titles != default:
-            say(f"  Roles saved now: {', '.join(titles)}")
-        new_titles = _fix_typos(ask, say, vocab, _ask_profile_list(ask, say, "Roles", default, hint, "SEO Executive",
-                                                                   required=not skills_only_ok))
+            roles, hint = titles, "Enter keeps these"
+        new_skills = _ask_profile_list(ask, say, "Skills", skills, hint, "SQL, Airflow, Recruitment", required=False)
+        if file in from_resume:
+            say("  Roles found in your resume:" if roles else
+                "  No job titles found in your resume. Type the roles you want, or press Enter to match by your "
+                "skills only.")
+            if titles and titles != roles:
+                say(f"  Roles saved now: {', '.join(titles)}")
+        new_titles = _fix_typos(ask, say, vocab, _ask_profile_list(
+            ask, say, "Roles", roles, hint if roles else "Enter leaves them empty", "Data Engineer, Recruiter",
+            required=not new_skills))
         saved_breakers, saved_priority = profile.get("deal_breakers", []), profile.get("priority_skills", [])
         new_breakers = _ask_deal_breakers(ask, say, vocab, clean_list(saved_breakers))
         avoided = {s for group in new_breakers for s in vocab.deal_breakers[group].get("skills", [])}
-        suggested = [s for title in new_titles for s in vocab.titles.get(title, {}).get("skills", [])
-                     if s in new_skills and s not in vocab.generic and s not in avoided]
-        priority_default = [s for s in clean_list(saved_priority) if s not in avoided] or list(dict.fromkeys(suggested))
-        say("  Priority skills: what this track's jobs should mainly be about. Jobs needing more of them rank higher.")
+        priority_default = [s for s in clean_list(saved_priority) if s not in avoided]
+        say("  Priority skills (optional): what this track's jobs should mainly be about. They count more in the match.")
         new_priority = _ask_profile_list(ask, say, "Priority skills", priority_default, "Enter accepts these",
-                                         "Roadmapping, User Research", required=False)
+                                         "Airflow, Data Modeling", required=False)
         added = [s for s in new_priority if s not in new_skills]
         if added:
             say(f"  Added to this track's skills too: {', '.join(added)}")
@@ -218,10 +181,6 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
         if (file.exists() and new_skills == saved_skills and new_titles == saved_titles
                 and new_breakers == saved_breakers and new_priority == saved_priority):
             continue
-        unknown = [t for t in new_titles if t not in vocab.titles]
-        if unknown:
-            say("  Not in the built-in list (they will match job titles containing those exact words): "
-                + ", ".join(unknown))
         profile["skills"], profile["titles"] = new_skills, new_titles
         profile["deal_breakers"], profile["priority_skills"] = new_breakers, new_priority
         file.parent.mkdir(parents=True, exist_ok=True)
@@ -309,44 +268,6 @@ def _ask_deal_breakers(ask: Ask, say: Say, vocab: Vocab, current: List[str]) -> 
                 "ones that only mention it a little are kept but flagged.")
             return chosen
         say(f"  Please type one of: {', '.join(known.values())}, or 'none', or press Enter to keep [{shown}].")
-
-
-def _ask_categories(ask: Ask, say: Say, name: str, groups) -> List[str]:
-    """Show the roles that need your skills, numbered by category, and ask which categories this track searches."""
-    say("  Roles that need your skills, by category:")
-    for number, (category, matches) in enumerate(groups, start=1):
-        say(f"   {number}. {category}")
-        for title, matched, wanted in matches:
-            say(f"        {title}: {len(matched)} of {len(wanted)} skills it needs ({', '.join(matched)})")
-    if len(groups) == 1:
-        return [groups[0][0]]
-    while True:
-        answer = ask(f"  Which categories should profile '{name}' search? Type the numbers, "
-                     f"for example 1 or 1,2 [1]: ").strip()
-        if not answer:
-            return [groups[0][0]]
-        parts = [p for p in re.split(r"[,\s]+", answer) if p]
-        if parts and all(p.isdigit() and 1 <= int(p) <= len(groups) for p in parts):
-            return [groups[int(p) - 1][0] for p in sorted(set(parts), key=int)]
-        say(f"  Please type numbers from 1 to {len(groups)}, for example 1 or 1,2. "
-            "To take category 1, press Enter on an empty line.")
-
-
-def _ask_split_track(ask: Ask, say: Say, others: List[str], profiles_dir: Path, taken: set) -> Optional[Path]:
-    """Offer to search the categories left out as a separate track, for one resume with two interests."""
-    example = re.sub(r"[^a-z0-9]+", "-", others[0].split()[0].lower()).strip("-") or "track2"
-    while True:
-        answer = ask(f"  Also search {', '.join(others)} as a separate track? Type a short name for it "
-                     f"(for example {example}), or press Enter to skip: ").strip().lower()
-        if not answer or is_non_answer(answer):
-            return None
-        file = profiles_dir / f"{answer}.json"
-        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,29}", answer) or answer == "example":
-            say("  Use letters, numbers, - or _ only (not 'example'), for example: seo")
-        elif file in taken or file.exists():
-            say(f"  A profile named '{answer}' already exists. Type another name, or press Enter to skip.")
-        else:
-            return file
 
 
 def _ask_profile_name(ask: Ask, say: Say, stem: str) -> str:

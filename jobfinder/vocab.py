@@ -4,7 +4,7 @@ import difflib
 import json
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from .filters import INDIA_PLACES
 from .textutil import has_phrase, norm
@@ -17,8 +17,17 @@ _NOT_SKILL_LABELS = {"education", "contact", "address", "email", "phone", "locat
                      "certifications", "awards", "hobbies", "interests", "references"}
 # A line that starts with a role title: up to 4 capitalized words ending in a role word.
 _TITLE_LINE = re.compile(r"^\s*((?:[A-Z][\w/&+.-]*\s+){1,4}(?:Engineer|Analyst|Developer|Scientist|Consultant|Specialist|"
-                         r"Architect|Designer|Manager|Associate|Executive|Strategist|Writer|Administrator))\b")
-_SENIORITY = re.compile(r"^(?:(?:Senior|Sr\.?|Junior|Jr\.?|Lead|Principal|Staff|Associate|Trainee|Intern)\s+)+")
+                         r"Architect|Designer|Manager|Associate|Executive|Strategist|Writer|Administrator|Recruiter|"
+                         r"Generalist|Coordinator|Officer|Partner))\b")
+_SENIORITY = re.compile(r"^(?:(?:Senior|Sr\.?|Junior|Jr\.?|Trainee)\s+)+")
+# Job history lines: a date range, and the role before the first separator ('|', '–', ' - ', ',', '@', ' at ').
+_DATE_RANGE = re.compile(r"\b(?:19|20)\d{2}\s*(?:-|–|—|to)\s*(?:[A-Za-z]{3,9}\.?\s+)?(?:(?:19|20)\d{2}|present|current|"
+                         r"now|till date|date)\b", re.I)
+_SEPARATOR = re.compile(r"\s*(?:\||–|—|\s-\s|,|@|\bat\b)\s*")
+# Degrees and schools are dated too, but they are not roles.
+_EDUCATION = re.compile(r"^(?:b|m)\.?\s?(?:tech|e|sc|com|a|s|ed|pharm|arch|des)\b|^(?:mba|bba|bca|mca|ph\.?d|diploma|"
+                        r"bachelor|master|class|ssc|hsc|cbse|icse|intermediate|10th|12th|high school|secondary)\b|"
+                        r"universit|college|institute|school|academy|certifi", re.I)
 _STOP_WORDS = {"and", "or", "the", "a", "an", "of", "to", "in", "on", "for", "with", "at", "by", "from", "as",
                "is", "are", "was", "were", "my", "our", "i", "we", "etc"}
 
@@ -29,7 +38,6 @@ class Vocab:
     def __init__(self, data: dict):
         self.skills: Dict[str, List[str]] = data.get("skills", {})
         self.titles: Dict[str, dict] = data.get("titles", {})
-        self.generic: set = set(data.get("generic_skills", []))
         self.exact_case: set = set(data.get("exact_case", []))
         self.deal_breakers: Dict[str, dict] = data.get("deal_breakers", {})
         # An exact-case skill's name is matched separately, in capitals only ('GEO' in a post, not 'geo').
@@ -69,9 +77,6 @@ class Vocab:
                 counts[name] = counts.get(name, 0) + found
         return [name for name, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
 
-    def suggest_titles(self, skills: List[str], limit: int = 6) -> List[str]:
-        return [title for title, _, _ in self.role_matches(skills, limit)]
-
     def resume_phrases(self, text: str, limit: int = 40) -> List[str]:
         """Skills listed in a resume that are not in the built-in list, such as 'Spring Boot' or 'HRMS'.
         Only items from list-like lines ('Tools: Jira, Figma, Spring Boot') are taken, so sentences,
@@ -108,21 +113,37 @@ class Vocab:
         return found[:limit]
 
     def resume_titles(self, text: str, limit: int = 6) -> List[str]:
-        """Role titles named in a resume, such as 'Data Engineer' in a job history line.
-        Built-in titles come first (found by their name or a longer alias, never a one-word alias such as
-        'devops', which is often a skill). Then other title-like lines ('Platform Reliability Engineer |
-        Acme | 2023 - now'), without words such as Senior or Lead."""
+        """Role titles named in a resume. First the roles in its job history, whatever the field: in a line such
+        as 'Staff Nurse | Apollo Hospitals | 2021 - Present', the part before the first separator. Then built-in
+        titles named anywhere (by their name or a longer alias, never a one-word alias such as 'devops', which is
+        often a skill), then other title-like lines. Senior, Junior and the like are left off."""
+        found: List[str] = []
+        covered = set()                       # every spelling of the roles found so far
+
+        def add(role: str) -> None:
+            spellings = set(self.synonyms(role))
+            if not spellings & covered:
+                found.append(role)
+                covered.update(spellings)
+
+        for line in (text or "").splitlines():
+            if not _DATE_RANGE.search(line):
+                continue                      # a job history line has dates: '2021 - Present', 'Jan 2020 - 2023'
+            role = _SENIORITY.sub("", _SEPARATOR.split(line.strip(), maxsplit=1)[0]).strip(" .:-")
+            if (1 <= len(role.split()) <= 5 and len(role) <= 45 and re.search(r"[A-Za-z]", role)
+                    and not re.search(r"\d", role) and not _EDUCATION.search(role)):
+                add(role)
         text_norm = norm(text)
-        found = [title for title in self.titles
-                 if any(has_phrase(text_norm, phrase) for phrase in
-                        [norm(title)] + [norm(a) for a in self.titles[title].get("aliases", []) if len(a.split()) >= 2])]
+        for title in self.titles:
+            if any(has_phrase(text_norm, phrase) for phrase in
+                   [norm(title)] + [norm(a) for a in self.titles[title].get("aliases", []) if len(a.split()) >= 2]):
+                add(title)
         for line in (text or "").splitlines():
             match = _TITLE_LINE.match(line)
-            if not match:
-                continue
-            title = _SENIORITY.sub("", match.group(1)).strip()
-            if len(title.split()) >= 2 and norm(title) not in {norm(t) for t in found} and not self.closest_title(title):
-                found.append(title)
+            if match and not _EDUCATION.search(line):
+                title = _SENIORITY.sub("", match.group(1)).strip()
+                if len(title.split()) >= 2 and not self.closest_title(title):
+                    add(title)
         return found[:limit]
 
     def closest_title(self, typed: str) -> Optional[str]:
@@ -135,6 +156,19 @@ class Vocab:
             return None
         close = difflib.get_close_matches(key, list(spellings), n=1, cutoff=0.88)
         return spellings[close[0]] if close else None
+
+    def synonyms(self, item: str) -> List[str]:
+        """Other spellings of a skill or role you saved, so a job saying 'PySpark' counts for 'Spark' and
+        'HRBP' for 'HR Business Partner'. Anything the built-in list does not know is used as you wrote it."""
+        key = norm(item)
+        found = {key} - {""}
+        for name, phrases in self._skill_phrases.items():
+            if key == norm(name) or key in phrases:
+                found.update(phrases)
+        for title, info in self.titles.items():
+            if key == norm(title) or key in {norm(a) for a in info.get("aliases", [])}:
+                found.update(self.title_phrases(title))
+        return sorted(found)
 
     def deal_breaker_terms(self, group: str, text: str) -> List[str]:
         """Distinct terms of a deal-breaker group (such as Coding) found in a job post."""
@@ -149,37 +183,6 @@ class Vocab:
         """True if the title itself names the work, such as 'Developer' for Coding."""
         title_norm = norm(title)
         return any(has_phrase(title_norm, norm(word)) for word in self.deal_breakers.get(group, {}).get("title_words", []))
-
-    def skills_in_name(self, name: str) -> set:
-        """Skills whose words sit inside a company name: Git/GitHub for 'gitlab', Notion for 'Notion'."""
-        squashed = norm(name).replace(" ", "")
-        return {skill for skill, phrases in self._skill_phrases.items()
-                if any(len(p) >= 3 and p.replace(" ", "") in squashed for p in phrases)}
-
-    def category(self, title: str) -> str:
-        """The group a role belongs to, such as 'Product & Strategy' or 'SEO & Content'."""
-        return self.titles.get(title, {}).get("category", "Other")
-
-    def role_groups(self, skills: List[str]) -> List[Tuple[str, List[Tuple[str, List[str], List[str]]]]]:
-        """Every role that needs 2 or more of these skills, grouped by category.
-        The group holding the best-matching role comes first."""
-        groups: Dict[str, list] = {}
-        for match in self.role_matches(skills, limit=None):
-            groups.setdefault(self.category(match[0]), []).append(match)
-        return list(groups.items())
-
-    def role_matches(self, skills: List[str], limit: Optional[int] = 6) -> List[Tuple[str, List[str], List[str]]]:
-        """Roles whose needed skills overlap yours (2 or more), best first, as
-        (title, your skills it needs, all skills it needs). These are the reasons shown to the user."""
-        have = set(skills)
-        scored = []
-        for title, info in self.titles.items():
-            wanted = info.get("skills", [])
-            matched = [s for s in wanted if s in have]
-            if len(matched) >= 2:
-                scored.append((len(matched), len(matched) / max(1, len(wanted)), title, matched, wanted))
-        scored.sort(key=lambda row: (-row[0], -row[1], row[2]))
-        return [(title, matched, wanted) for _, _, title, matched, wanted in scored[:limit]]
 
     def title_phrases(self, title: str) -> List[str]:
         """Normalized spellings that count as this title (the title itself plus known aliases)."""

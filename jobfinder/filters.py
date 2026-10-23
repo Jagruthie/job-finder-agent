@@ -112,6 +112,12 @@ def in_country(location: str, country: str = "India") -> bool:
             or (has_phrase(location_norm, "remote") and remote_in(location_norm, country)))
 
 
+# Cities with two common spellings: a job in "Bangalore" is in your "Bengaluru".
+_SAME_CITY = [{"bengaluru", "bangalore"}, {"gurugram", "gurgaon"}, {"mumbai", "bombay"}, {"chennai", "madras"},
+              {"kolkata", "calcutta"}, {"delhi", "new delhi", "ncr", "delhi ncr"}, {"mysuru", "mysore"},
+              {"thiruvananthapuram", "trivandrum"}, {"kochi", "cochin"}]
+
+
 def location_matches(location: str, wanted: List[str], remote_country: str = "India") -> bool:
     location_norm = norm(location)
     for place in wanted:
@@ -119,7 +125,9 @@ def location_matches(location: str, wanted: List[str], remote_country: str = "In
         if place_norm == "remote":
             if has_phrase(location_norm, "remote") and remote_in(location_norm, remote_country):
                 return True
-        elif place_norm and place_norm in location_norm:
+            continue
+        spellings = next((group for group in _SAME_CITY if place_norm in group), {place_norm})
+        if any(spelling and spelling in location_norm for spelling in spellings):
             return True
     return False
 

@@ -158,8 +158,6 @@ class VocabTests(unittest.TestCase):
         for expected in ["Agile", "User Research", "SQL", "Python", "SEO", "Keyword Research", "Ahrefs"]:
             self.assertIn(expected, skills)
         self.assertNotIn("Git/GitHub", skills)
-        titles = VOCAB.suggest_titles(skills)
-        self.assertIn("SEO Executive", titles)
 
     def test_longer_skill_phrase_is_not_counted_twice(self):
         skills = VOCAB.extract_skills("Keyword research and content strategy for our blog.")
@@ -171,9 +169,6 @@ class VocabTests(unittest.TestCase):
         both = VOCAB.extract_skills("Keyword research. We value research and strategy.")
         self.assertIn("Research", both)
         self.assertIn("Strategy", both)
-        # So two buried words no longer suggest an unrelated role.
-        self.assertNotIn("Founder's Office", VOCAB.suggest_titles(VOCAB.extract_skills(
-            "SEO, keyword research, Ahrefs, Semrush, content strategy, GEO, blog writing.")))
 
     def test_git_does_not_match_github_or_digit(self):
         self.assertEqual(VOCAB.extract_skills("digital gift"), [])
@@ -380,7 +375,6 @@ class SetupTests(unittest.TestCase):
                 self.assertEqual(json.load(handle)["titles"], ["Associate Product Manager", "Growth Rocketeer"])
             with open(os.path.join(profiles, "example.json")) as handle:
                 self.assertEqual(json.load(handle)["titles"], ["Keep Me"])
-            self.assertTrue(any("Growth Rocketeer" in line for line in said))   # warned: not a known role
             self.assertTrue(any("at least 8 LPA" in line for line in said))     # repeated back what it understood
 
     def test_polluted_saved_cities_are_repaired_and_stray_keys_ignored(self):
@@ -399,17 +393,6 @@ class SetupTests(unittest.TestCase):
             with open(path) as handle:
                 saved = json.load(handle)
             self.assertEqual(saved["preferred_locations"], ["hyderabad", "remote"])
-
-    def test_empty_roles_get_suggestions_and_enter_accepts_them(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            profiles = os.path.join(tmp, "profiles")
-            os.makedirs(profiles)
-            with open(os.path.join(profiles, "seo.json"), "w") as handle:
-                json.dump({"name": "seo", "skills": ["SEO", "Keyword Research", "Ahrefs"], "titles": []}, handle)
-            run_setup(os.path.join(tmp, "settings.json"), profiles, VOCAB, say=lambda s: None,
-                      ask=self.scripted(["", "", "", "", "none", "", "", "", "", ""]))   # Enter at skills, roles, deal-breakers, priority
-            with open(os.path.join(profiles, "seo.json")) as handle:
-                self.assertIn("SEO Executive", json.load(handle)["titles"])
 
     def test_empty_roles_cannot_be_skipped_when_no_suggestion_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -478,18 +461,11 @@ class SetupTests(unittest.TestCase):
 
 
 class SafetyTests(unittest.TestCase):
-    def test_profile_with_no_roles_is_refused_not_treated_as_match_everything(self):
-        empty = {"name": "empty", "skills": ["SQL"], "titles": []}
-        state = {"first_seen": {}, "dropped": {}}
-        with self.assertRaises(ProfileError) as caught:
-            run_pipeline(COMPANIES, [PM, empty], {}, VOCAB, state, fake_fetch, now=NOW)
-        self.assertIn("empty", str(caught.exception))
-
     def test_unrelated_titles_never_appear(self):
         state = {"first_seen": {}, "dropped": {}}
         rows, stats, _ = run_pipeline(COMPANIES, [PM, SEO], {}, VOCAB, state, fake_fetch, now=NOW)
         self.assertNotIn("Office Chef", [r["Role"] for r in rows])
-        self.assertGreaterEqual(stats["title_mismatch"], 1)
+        self.assertGreaterEqual(stats["weak_match"], 1)
 
     def test_pay_outranks_shift_and_location(self):
         state = {"first_seen": {}, "dropped": {}}
@@ -599,7 +575,7 @@ class ManualTestingBugTests(unittest.TestCase):
         def fetch(platform, board, name):
             fetched.append(board)
             return []
-        bad = {"name": "seo", "skills": ["SEO"], "titles": ["keep"]}
+        bad = {"name": "seo", "skills": [], "titles": ["keep"]}      # 'keep' is not a role, and no skills
         with self.assertRaises(ProfileError) as caught:
             run_pipeline(COMPANIES, [PM, bad], {}, VOCAB, {"first_seen": {}, "dropped": {}}, fetch, now=NOW)
         self.assertIn("Stopped", str(caught.exception))
@@ -611,7 +587,7 @@ class ManualTestingBugTests(unittest.TestCase):
         import io
         from jobfinder.cli import main
         with tempfile.TemporaryDirectory() as tmp:
-            folder = self.make_profiles(tmp, {"seo.json": {"name": "seo", "skills": ["SEO"], "titles": []}})
+            folder = self.make_profiles(tmp, {"seo.json": {"name": "seo", "skills": [], "titles": []}})
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 code = main(["demo", "--profiles", os.path.join(folder, "seo.json"),
@@ -620,46 +596,15 @@ class ManualTestingBugTests(unittest.TestCase):
             self.assertIn("Kept: 0", out.getvalue())
 
 
-class RolesFromSkillsTests(unittest.TestCase):
-    """The process: skills from the resume, confirmed by the user, then the roles that need those skills."""
-
-    def test_roles_come_from_confirmed_skills_with_reasons(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            folder = os.path.join(tmp, "profiles")
-            os.makedirs(folder)
-            with open(os.path.join(folder, "seo.json"), "w") as handle:
-                json.dump({"name": "seo", "skills": ["SQL"], "titles": ["seo strategist"]}, handle)
-            said = []
-            queue = ["", "", "", "", "none",
-                     "",                                         # resume: Enter skips
-                     "SEO, Keyword Research, Ahrefs, Writing",   # the user corrects the skills
-                     "",                                         # Enter accepts the roles that need them
-                     "", ""]                                     # no deal-breakers, suggested priorities
-            run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=said.append,
-                      ask=lambda prompt: queue.pop(0))
-            with open(os.path.join(folder, "seo.json")) as handle:
-                saved = json.load(handle)
-            self.assertEqual(saved["skills"], ["SEO", "Keyword Research", "Ahrefs", "Writing"])
-            self.assertEqual(saved["titles"], VOCAB.suggest_titles(saved["skills"]))
-            self.assertIn("SEO Executive", saved["titles"])
-            self.assertNotIn("seo strategist", saved["titles"])
-            self.assertTrue(any("SEO Executive: 3 of 8 skills it needs" in line for line in said))
-            self.assertTrue(any("Roles saved now: seo strategist" in line for line in said))
-
-    def test_role_matches_need_two_skills(self):
-        self.assertEqual(VOCAB.role_matches(["SEO"]), [])
-        title, matched, _ = VOCAB.role_matches(["GEO", "SEO"])[0]
-        self.assertEqual((title, sorted(matched)), ("GEO Specialist", ["GEO", "SEO"]))
-
-
 class ResumeInSetupTests(unittest.TestCase):
-    """Setup asks for the resume, reads its skills, the user confirms them, then roles follow from them."""
+    """Setup asks for the resume and reads its skills and roles; the user confirms them."""
 
     def test_setup_reads_resume_and_makes_a_profile(self):
         with tempfile.TemporaryDirectory() as tmp:
             resume = os.path.join(tmp, "My Resume.txt")
             with open(resume, "w") as handle:
-                handle.write("SEO, keyword research on Ahrefs and Semrush, Google Search Console, content strategy.")
+                handle.write("SEO Executive | Inkwell Media | 2024 - Present\n"
+                             "SEO, keyword research on Ahrefs and Semrush, Google Search Console, content strategy.")
             folder = os.path.join(tmp, "profiles")          # does not exist yet: a first-time user
             said = []
             queue = ["", "", "", "", "none",
@@ -667,7 +612,7 @@ class ResumeInSetupTests(unittest.TestCase):
                      "seo",                                   # profile name
                      "",                                      # no more resumes
                      "",                                      # Enter accepts the skills found
-                     "",                                      # Enter accepts the roles that need them
+                     "",                                      # Enter accepts the roles found in it
                      "", ""]                                  # no deal-breakers, suggested priorities
             run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=said.append,
                       ask=lambda prompt: queue.pop(0))
@@ -675,7 +620,7 @@ class ResumeInSetupTests(unittest.TestCase):
                 saved = json.load(handle)
             self.assertIn("Ahrefs", saved["skills"])
             self.assertIn("SEO Executive", saved["titles"])
-            self.assertEqual(saved["titles"], VOCAB.suggest_titles(saved["skills"]))
+            self.assertEqual(saved["titles"], ["SEO Executive"])
             self.assertNotIn(resume, json.dumps(saved))      # the resume path is not stored
             self.assertTrue(any("Skills found in your resume" in line for line in said))
 
@@ -709,52 +654,6 @@ class TwoTrackTests(unittest.TestCase):
         for track in ("pm", "seo"):
             self.assertEqual([r["Rank"] for r in rows if r["Track"] == track],
                              list(range(1, tracks.count(track) + 1)))
-
-    def test_roles_are_grouped_by_category(self):
-        groups = dict(VOCAB.role_groups(["SEO", "Keyword Research", "Ahrefs", "Content Strategy",
-                                         "Product Management", "Roadmapping", "Agile", "User Research"]))
-        self.assertIn("SEO Executive", [t for t, _, _ in groups["SEO & Content"]])
-        self.assertIn("Associate Product Manager", [t for t, _, _ in groups["Product & Strategy"]])
-        for title in VOCAB.titles:                                             # every role has a category
-            self.assertNotEqual(VOCAB.category(title), "Other", title)
-
-    def test_one_resume_with_two_interests_makes_two_tracks(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            resume = os.path.join(tmp, "resume.txt")
-            with open(resume, "w") as handle:
-                handle.write("Product management, roadmap, agile sprints, user research, product specs. "
-                             "Also SEO, keyword research, Ahrefs, Semrush and content strategy.")
-            folder = os.path.join(tmp, "profiles")
-            with open(resume) as handle:
-                categories = [c for c, _ in VOCAB.role_groups(VOCAB.extract_skills(handle.read()))]
-            said = []
-            queue = ["", "", "", "", "none",
-                     resume, "pm", "",          # one resume, profile 'pm', no more resumes
-                     "",                        # Enter accepts the skills
-                     str(categories.index("Product & Strategy") + 1),   # pm searches Product & Strategy only
-                     "seo",                     # the other category becomes track 'seo'
-                     "", "", "",                # pm: Enter accepts roles, no deal-breakers, priorities
-                     "", "", ""]                # seo: the same
-            run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=said.append,
-                      ask=lambda prompt: queue.pop(0))
-            with open(os.path.join(folder, "pm.json")) as handle:
-                pm = json.load(handle)
-            with open(os.path.join(folder, "seo.json")) as handle:
-                seo = json.load(handle)
-            self.assertEqual(pm["skills"], seo["skills"])
-            self.assertTrue(all(VOCAB.category(t) == "Product & Strategy" for t in pm["titles"]))
-            self.assertIn("SEO Executive", seo["titles"])
-            self.assertNotIn("Associate Product Manager", seo["titles"])
-            self.assertTrue(any(". Product & Strategy" in line for line in said))
-
-    def test_bad_category_answer_is_asked_again(self):
-        said = []
-        queue = ["keep", "9", "2"]
-        from jobfinder.setup import _ask_categories
-        groups = VOCAB.role_groups(["SEO", "Keyword Research", "Product Management", "Roadmapping"])
-        chosen = _ask_categories(lambda p: queue.pop(0), said.append, "x", groups)
-        self.assertEqual(chosen, [groups[1][0]])
-        self.assertTrue(any("press Enter" in line for line in said))
 
     def test_run_uses_every_profile_by_default(self):
         import contextlib
@@ -873,8 +772,10 @@ class EntryLevelTests(unittest.TestCase):
         profile = {"name": "pm", "skills": ["SQL"], "titles": ["Business Analyst", "Associate Product Manager"]}
         rows, stats, _ = run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], [profile], {}, VOCAB,
                                       {"first_seen": {}, "dropped": {}}, lambda p, b, n: jobs, now=NOW)
-        self.assertEqual([r["Apply link"][-1] for r in rows], ["3", "2", "5", "1"])
-        self.assertEqual(rows[1]["Experience bucket"], "Entry-level title (years not stated)")
+        self.assertEqual(sorted(r["Apply link"][-1] for r in rows), ["1", "2", "3", "5"])
+        labels = {r["Apply link"][-1]: r["Experience bucket"] for r in rows}
+        self.assertEqual(labels["2"], "Entry-level title (years not stated)")
+        self.assertEqual(labels["3"], "Within your range")
         self.assertEqual(stats["senior_title"], 1)
 
 
@@ -985,11 +886,11 @@ class SkillsFirstTests(unittest.TestCase):
     def test_resume_phrases_take_skill_lists_but_not_personal_details(self):
         text = ("Priya Sharma | Hyderabad | priya@example.com | +91 98765 43210\n"
                 "Skills: Java, Spring Boot, AWS, Docker, Kubernetes, Git, C++, Go\n"
-                "Core skills - Talent Acquisition | Payroll | HRMS\n"
+                "Core skills - Mentoring | Vendor Management | Event Planning\n"
                 "Education: B.Tech, JNTU Hyderabad, 2024\n"
                 "I built a payment service in Java, deployed on AWS, with tests.")
         # Java, AWS, Docker and Kubernetes are built-in skills, so they are found anyway and not repeated here.
-        self.assertEqual(VOCAB.resume_phrases(text), ["Spring Boot", "Talent Acquisition", "Payroll", "HRMS"])
+        self.assertEqual(VOCAB.resume_phrases(text), ["Spring Boot", "Mentoring", "Vendor Management", "Event Planning"])
 
     def test_title_not_listed_but_enough_skills_is_kept_in_your_city_only(self):
         analyst = {"name": "data", "skills": ["SQL", "Python", "Power BI", "Tableau"], "titles": []}
@@ -998,7 +899,8 @@ class SkillsFirstTests(unittest.TestCase):
                                         self.job("2", "Insights Associate", text, location="Austin, TX"),
                                         self.job("3", "Insights Associate", "SQL and Python only.")], [analyst])
         self.assertEqual([r["Apply link"][-1] for r in rows], ["1"])        # 2: wrong city, 3: only 2 skills
-        self.assertEqual(rows[0]["Matched by"], "skills: Power BI, Python, SQL, Tableau")
+        self.assertEqual(rows[0]["Matched by"], "your skills")
+        self.assertEqual(set(rows[0]["Matched skills"].split(", ")), {"Power BI", "Python", "SQL", "Tableau"})
         self.assertIn("Power BI", rows[0]["Matched skills"])
         self.assertEqual(stats["kept_by_skills"], 1)
 
@@ -1008,18 +910,7 @@ class SkillsFirstTests(unittest.TestCase):
         jobs = [self.job("1", "Insights Associate", text), self.job("2", "Business Analyst", text)]
         rows, _, _ = self.run_jobs(jobs, [profile])
         self.assertEqual([(r["Apply link"][-1], r["Matched by"]) for r in rows],
-                         [("2", "role title"), ("1", "skills: Data Analysis, Power BI, SQL, Tableau")])
-        rows, _, _ = self.run_jobs(jobs, [profile], match_by="titles")
-        self.assertEqual([r["Apply link"][-1] for r in rows], ["2"])
-
-    def test_a_track_with_roles_keeps_only_jobs_needing_its_role_skills(self):
-        pm = {"name": "pm", "skills": ["Product Management", "Roadmapping", "User Research", "Python", "SQL", "Git/GitHub",
-                                       "Research", "Presentation"], "titles": ["Associate Product Manager"]}
-        rows, _, _ = self.run_jobs([
-            self.job("1", "Backend Developer", "0-1 years. Python, SQL and Git."),                     # developer job
-            self.job("2", "Research Associate", "0-1 years. Research, presentation, Python, SQL."),  # broad skills
-            self.job("3", "Growth Generalist", "0-1 years. Product roadmap, user research, SQL.")], [pm])
-        self.assertEqual([r["Apply link"][-1] for r in rows], ["3"])
+                         [("2", "your role: Business Analyst"), ("1", "your skills")])
 
     def test_geo_matches_only_in_capitals(self):
         self.assertEqual(VOCAB.extract_skills("geo-distributed systems"), [])
@@ -1033,14 +924,6 @@ class SkillsFirstTests(unittest.TestCase):
                                   company="gitlab")]
         rows, _, _ = self.run_jobs(jobs, [profile])
         self.assertEqual(rows, [])     # only SQL is specific: the rest is in most jobs, and Git is in the company name
-
-    def test_profile_without_roles_needs_skills_and_skills_mode(self):
-        no_roles = {"name": "x", "skills": ["SQL", "Python", "Tableau"], "titles": []}
-        self.run_jobs([], [no_roles])                                              # allowed
-        with self.assertRaises(ProfileError):
-            self.run_jobs([], [no_roles], match_by="titles")
-        with self.assertRaises(ProfileError):
-            self.run_jobs([], [{"name": "y", "skills": ["SQL"], "titles": []}])
 
     def test_setup_lets_a_skills_only_track_leave_roles_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1056,7 +939,7 @@ class SkillsFirstTests(unittest.TestCase):
                 saved = json.load(handle)
             self.assertEqual(saved["skills"], ["Ansible", "Prometheus", "Grafana", "Nagios", "Puppet"])
             self.assertEqual(saved["titles"], [])
-            self.assertTrue(any("leave them empty" in line for line in said))
+            self.assertTrue(any("No job titles found in your resume" in line for line in said))
 
 
 class RemoteSourceTests(unittest.TestCase):
@@ -1181,7 +1064,8 @@ class PriorityAndDealBreakerTests(unittest.TestCase):
             self.job("1", "Associate Product Manager", "0-1 years. Roadmap."),
             self.job("2", "Associate Product Manager", "0-1 years. Roadmap, user research and product specs.")], [self.PM])
         self.assertEqual([r["Apply link"][-1] for r in rows], ["2", "1"])
-        self.assertEqual(rows[0]["Priority skills"], "Product Management, Product Specs, Roadmapping, User Research")
+        self.assertEqual(set(rows[0]["Priority skills"].split(", ")),
+                         {"Product Management", "Product Specs", "Roadmapping", "User Research"})
         prepared = prepare_profile(self.PM, VOCAB)
         self.assertNotIn("SQL", prepared["_priority"])                          # SQL is Coding, a deal-breaker here
 
@@ -1193,8 +1077,8 @@ class PriorityAndDealBreakerTests(unittest.TestCase):
                 json.dump({"name": "pm", "skills": ["Product Management", "Roadmapping", "SQL", "Python"],
                            "titles": ["Associate Product Manager", "Business Analyst"]}, handle)
             said, asked = [], []
-            # ..., resume, skills, categories (the one with the saved roles comes first), split track, roles, ...
-            answers = ["", "", "", "", "none", "", "", "", "", "", "banana", "coding", ""]
+            # ..., resume, skills, roles, deal-breakers (a wrong answer, then coding), priority skills
+            answers = ["", "", "", "", "none", "", "", "", "banana", "coding", "Product Management, SQL"]
             def ask(prompt):
                 asked.append(prompt)
                 return answers.pop(0)
@@ -1202,7 +1086,7 @@ class PriorityAndDealBreakerTests(unittest.TestCase):
             with open(os.path.join(folder, "pm.json")) as handle:
                 saved = json.load(handle)
             self.assertEqual(saved["deal_breakers"], ["Coding"])
-            self.assertEqual(saved["priority_skills"], ["Product Management", "Roadmapping"])
+            self.assertEqual(saved["priority_skills"], ["Product Management", "SQL"])
             self.assertTrue(any("Please type one of: Coding" in line for line in said))
 
 
@@ -1244,7 +1128,6 @@ class DataEngineerTrialTests(unittest.TestCase):
         for skill in ("AWS", "Apache Spark", "Airflow", "dbt", "ETL/ELT", "Redshift", "Shell Scripting"):
             self.assertIn(skill, skills)
         self.assertEqual(VOCAB.resume_titles(self.RESUME)[0], "Data Engineer")
-        self.assertEqual(VOCAB.role_groups(skills)[0][0], "Data & Engineering")
         with tempfile.TemporaryDirectory() as tmp:
             resume = os.path.join(tmp, "cv.txt")
             with open(resume, "w") as handle:
@@ -1258,7 +1141,7 @@ class DataEngineerTrialTests(unittest.TestCase):
         self.assertEqual(saved["titles"][0], "Data Engineer")
         self.assertIn("Spring Boot", saved["skills"])
         self.assertFalse([s for s in saved["skills"] if "(" in s])
-        self.assertTrue(any("Roles named in your resume: Data Engineer" in line for line in said))
+        self.assertTrue(any("Roles found in your resume" in line for line in said))
 
     def test_mistyped_role_is_offered_the_built_in_spelling(self):
         self.assertEqual(VOCAB.closest_title("Data Enginner"), "Data Engineer")
@@ -1295,7 +1178,6 @@ class DataEngineerTrialTests(unittest.TestCase):
         profile = {"name": "kp", "skills": ["SQL", "Python", "Airflow"], "titles": [], "priority_skills": ["Data Engineering"]}
         prepared = prepare_profile(profile, VOCAB)
         self.assertIn("Data Engineering", prepared["_skills"])
-        self.assertEqual(prepared["_core_needed"], 1)
         rows, stats, _ = self.run_jobs([self.job("1", "Platform Associate",
                                                  "2 years of experience. Data pipelines with SQL, Python and Airflow.")],
                                        [profile])
@@ -1352,6 +1234,128 @@ class DataEngineerTrialTests(unittest.TestCase):
         rows, _, _ = self.run_jobs([self.job("1", "Data Engineer II", "SQL, Python. 3+ years of experience.")],
                                    [{"name": "kp", "skills": ["SQL", "Python"], "titles": ["Data Engineer"]}])
         self.assertEqual(len(rows), 1)
+
+
+
+class OtherFieldsTests(unittest.TestCase):
+    """A resume from a field other than tech gets roles from its own field, never a wrong one."""
+    HR_RESUME = ("Ananya Rao | Hyderabad | ananya@example.com\n"
+                 "HR Executive | Brightpath IT Services | 2023 - Present\n"
+                 "Managed end-to-end recruitment, onboarding of new joiners and monthly payroll inputs in Keka.\n"
+                 "Core: Talent Acquisition, Onboarding, Employee Engagement, Payroll, HR Operations, Employee Relations\n"
+                 "Tools: Keka, Darwinbox, Naukri RMS, MS Excel\n"
+                 "Compliance: PF, ESI, Labour Laws, POSH\n")
+
+    def test_hr_resume_gets_hr_roles(self):
+        skills = VOCAB.extract_skills(self.HR_RESUME) + VOCAB.resume_phrases(self.HR_RESUME)
+        self.assertIn("Talent Acquisition", skills)
+        self.assertEqual(VOCAB.resume_titles(self.HR_RESUME)[0], "HR Executive")
+        for title in ("Talent Acquisition Intern", "Regional HRBP", "People Generalist", "Intern- HR Onboarding"):
+            self.assertTrue(filters.title_matches(title, sorted({p for t, i in VOCAB.titles.items()
+                                                                 if i.get("category") == "HR & People"
+                                                                 for p in VOCAB.title_phrases(t)})), title)
+
+class SimilarityMatchTests(unittest.TestCase):
+    """Each day's jobs are ranked against the roles and skills you saved from your resume."""
+
+    def job(self, job_id, title, text, location="Hyderabad"):
+        return Job("demo", "x", "Acme", job_id, title, location, f"https://e/{job_id}", text, NOW)
+
+    def filler(self, count=25):
+        """Ordinary jobs, so the run has enough jobs to tell common words from rare ones."""
+        return [self.job(f"f{i}", "Driver", "Good communication and a valid licence. We are hiring.") for i in range(count)]
+
+    def run_jobs(self, jobs, profiles, **settings):
+        return run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], profiles,
+                            {"preferred_locations": ["Hyderabad"], "max_experience_years": 3, **settings}, VOCAB,
+                            {"first_seen": {}, "dropped": {}}, lambda p, b, n: jobs, now=NOW)
+
+    def test_any_field_works_with_no_built_in_knowledge_of_it(self):
+        accounts = {"name": "acc", "titles": ["Accounts Executive"],
+                    "skills": ["Tally", "GST Filing", "Bank Reconciliation", "Accounts Payable"]}
+        rows, stats, _ = self.run_jobs(self.filler() + [
+            self.job("1", "Accounts Executive", "Book keeping for a retail chain."),
+            self.job("2", "Finance Associate", "Tally, GST filing and bank reconciliation every month."),
+            self.job("3", "Store Associate", "Billing at the counter.")], [accounts])
+        self.assertEqual({r["Apply link"][-1]: r["Matched by"] for r in rows},
+                         {"1": "your role: Accounts Executive", "2": "your skills"})
+        self.assertEqual(set(rows[[r["Apply link"][-1] for r in rows].index("2")]["Matched skills"].split(", ")),
+                         {"Tally", "GST Filing", "Bank Reconciliation"})
+
+    def test_words_most_jobs_say_are_not_reasons(self):
+        talker = {"name": "t", "titles": [], "skills": ["Communication", "Hiring", "Licence", "Python"]}
+        rows, stats, _ = self.run_jobs(self.filler() + [
+            self.job("1", "Assistant", "Good communication, a valid licence, we are hiring, some Python.")], [talker])
+        self.assertEqual(rows, [])          # only Python is specific; the rest is in almost every job today
+        self.assertGreaterEqual(stats["weak_match"], 1)
+
+    def test_roles_are_compared_with_job_titles_only(self):
+        recruiter = {"name": "hr", "titles": ["Recruiter"], "skills": ["Talent Acquisition"]}
+        rows, _, _ = self.run_jobs(self.filler() + [
+            self.job("1", "Software Engineer", "Build APIs. Our recruiter will call you within a week."),
+            self.job("2", "Technical Recruiter", "Hire engineers.")], [recruiter])
+        self.assertEqual([r["Apply link"][-1] for r in rows], ["2"])
+
+    def test_other_spellings_from_the_built_in_list_count(self):
+        data = {"name": "de", "titles": [], "skills": ["Spark", "Airflow", "Redshift"]}
+        rows, _, _ = self.run_jobs(self.filler() + [
+            self.job("1", "Platform Associate", "PySpark jobs scheduled in Apache Airflow, loading Amazon Redshift.")], [data])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(set(rows[0]["Matched skills"].split(", ")), {"Spark", "Airflow", "Redshift"})
+
+    def test_weak_matches_far_below_the_best_are_cut(self):
+        data = {"name": "de", "titles": [], "skills": ["SQL", "Airflow", "dbt", "Snowflake", "Kafka", "Python"]}
+        rows, stats, _ = self.run_jobs(self.filler() + [
+            self.job("1", "Data Platform Associate", "SQL, Airflow, dbt, Snowflake, Kafka and Python, every day. "
+                                                     "Airflow DAGs, dbt models, Snowflake warehouse, Kafka streams."),
+            self.job("2", "Support Associate", "Some SQL, a little Python, and read Kafka logs.")], [data])
+        self.assertEqual([r["Apply link"][-1] for r in rows], ["1"])
+        self.assertEqual(rows[0]["Match"], 100)
+
+    def test_a_strong_match_elsewhere_beats_a_weak_one_in_your_city(self):
+        analyst = {"name": "da", "titles": ["Data Analyst"], "skills": ["SQL", "Power BI", "Tableau", "Excel"]}
+        rows, _, _ = self.run_jobs(self.filler() + [
+            self.job("1", "Data Analyst", "Excel.", location="Hyderabad"),
+            self.job("2", "Data Analyst", "SQL, Power BI and Tableau dashboards, Excel models.", location="Pune")],
+            [analyst])
+        self.assertEqual([r["Apply link"][-1] for r in rows], ["2", "1"])
+
+    def test_a_profile_needs_roles_or_skills(self):
+        self.run_jobs([], [{"name": "a", "titles": [], "skills": ["SQL"]}])          # skills alone are enough
+        self.run_jobs([], [{"name": "b", "titles": ["Recruiter"], "skills": []}])    # and so are roles
+        with self.assertRaises(ProfileError):
+            self.run_jobs([], [{"name": "c", "titles": ["keep"], "skills": []}])
+
+    def test_two_spellings_of_a_city_are_the_same_city(self):
+        self.assertTrue(filters.location_matches("Bangalore, India", ["Bengaluru"]))
+        self.assertTrue(filters.location_matches("Gurgaon", ["Gurugram"]))
+        self.assertFalse(filters.location_matches("Pune", ["Bengaluru"]))
+
+
+class ResumeRolesTests(unittest.TestCase):
+    """The role in each job history line is read, whatever the field."""
+
+    def test_roles_from_job_history_in_any_field(self):
+        cases = {
+            "Accountant | Sharma & Co | 2022 - Present": ["Accountant"],
+            "Staff Nurse | Apollo Hospitals | 2021 - Present": ["Staff Nurse"],
+            "Mathematics Teacher | DPS School | 2020 - Present": ["Mathematics Teacher"],
+            "Senior Sales Executive, Reliance Retail, Jan 2022 – Present": ["Sales Executive"],
+            "Graphic Designer at Pixel Studio, 2023 - now": ["Graphic Designer"],
+        }
+        for line, roles in cases.items():
+            self.assertEqual(VOCAB.resume_titles(line), roles, line)
+
+    def test_degrees_certificates_and_one_off_years_are_not_roles(self):
+        text = ("B.Sc Nursing, Osmania University, 2017 - 2021\n"
+                "MBA (Human Resources), Osmania University, 2020 - 2022\n"
+                "AWS Certified Solutions Architect, 2023\n"
+                "Data Analyst | Kite | 2021 - 2023\n")
+        self.assertEqual(VOCAB.resume_titles(text), ["Data Analyst"])
+
+    def test_the_job_history_role_comes_first_and_spellings_are_not_repeated(self):
+        text = "HR Executive | Brightpath | 2023 - Present\nHR Intern | Nova | 2022 - 2023\nCore: Talent Acquisition\n"
+        self.assertEqual(VOCAB.resume_titles(text), ["HR Executive", "Recruiter"])   # HR Intern is another HR Executive
 
 
 class FindingJobsTests(unittest.TestCase):

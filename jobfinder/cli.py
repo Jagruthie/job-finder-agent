@@ -115,20 +115,20 @@ def print_summary(stats, failures, settings, rows=(), profiles=()) -> None:
     print(f"Jobs seen: {stats['jobs_seen']}")
     print(f"  removed as stale (older than {settings['freshness_days']} days): {stats['stale_dropped']}")
     print(f"  skipped, already removed earlier: {stats['already_dropped']}")
-    print(f"  not your roles and not enough of your skills: {stats['title_mismatch']}")
+    print(f"  not a strong enough match for your roles and skills: {stats['weak_match']}")
     print(f"  too senior (title or years): {stats['senior_title'] + stats['too_senior']}")
     print(f"  removed by your deal-breakers (for example coding-heavy): {stats['deal_breaker']}")
     print(f"  dropped for location: {stats['location_dropped']}")
     print(f"  dropped for pay outside your range: {stats['pay_dropped']}")
     print(f"Kept: {stats['kept']} (of which experience not stated: {stats['kept_experience_not_stated']}; "
-          f"kept for your skills although the title is not on your list: {stats['kept_by_skills']})")
+          f"matched by your roles: {stats['kept_by_title']}; by your skills only: {stats['kept_by_skills']})")
     if len(profiles) > 1:
         print("  per track: " + ", ".join(f"{p['name']} {sum(r['Track'] == p['name'] for r in rows)}"
                                          for p in profiles))
 
 
 def print_preview(rows: List[dict], profiles=()) -> None:
-    print("\nResults per track, best first:")
+    print("\nResults per track, best first (match: 100 is today's best for the track):")
     for profile in profiles:
         if not any(row["Track"] == profile["name"] for row in rows):
             print(f"\n=== Track '{profile['name']}': no jobs kept ===")
@@ -138,11 +138,10 @@ def print_preview(rows: List[dict], profiles=()) -> None:
             track = row["Track"]
             count = sum(r["Track"] == track for r in rows)
             print(f"\n=== Track '{track}': {count} job{'s' if count != 1 else ''} ===")
-        fit = f"{row['Fit %']}%" if row["Fit %"] != "" else "n/a"
-        print(f"\n{row['Rank']}. {row['Role']} at {row['Company']}  [{row['Track']}, fit {fit}]")
+        print(f"\n{row['Rank']}. {row['Role']} at {row['Company']}  [{row['Track']}, match {row['Match']}]")
         print(f"   {row['Location']} | posted {row['Posted']} ({row['Date basis']}) | experience: {row['Experience']}"
               f" ({row['Experience bucket']})")
-        print(f"   matched: {row['Matched skills'] or '-'}")
+        print(f"   why: {row['Matched by']}; skills: {row['Matched skills'] or '-'}")
         print(f"   missing: {row['Missing skills'] or '-'}")
         print(f"   pay: {row['Pay']} ({row['Pay check']}) | email: {row['Company email'] or '-'} | X: {row['Founder X handle'] or '-'}")
         print(f"   apply: {row['Apply link']}")
@@ -255,21 +254,21 @@ def cmd_profile(args) -> int:
     vocab = Vocab.load()
     text = read_resume_text(args.resume)
     skills = vocab.extract_skills(text) + vocab.resume_phrases(text)
-    titles = vocab.suggest_titles(skills)
+    titles = vocab.resume_titles(text)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / f"{args.name}.json"
     target.write_text(json.dumps({
-        "_note": "SUGGESTIONS ONLY. Delete skills that are wrong, add ones the agent missed (use names from data/skills.json), and fix the titles.",
+        "_note": "From your resume. Delete skills that are wrong, add ones the agent missed in your own words, and fix the titles.",
         "name": args.name,
         "skills": skills,
         "titles": titles,
     }, indent=2), encoding="utf-8")
-    print(f"Found {len(skills)} skills and suggested {len(titles)} titles.")
+    print(f"Found {len(skills)} skills and {len(titles)} roles in your resume.")
     print(f"Skills: {', '.join(skills) or '(none)'}")
-    print(f"Suggested roles (from those skills): {', '.join(titles) or '(none)'}")
+    print(f"Roles: {', '.join(titles) or '(none)'}")
     print("\nNow run: python -m jobfinder setup")
-    print("It shows these skills for you to confirm, then the roles that need those skills. This is the confirm step.")
+    print("It shows these skills and roles for you to confirm. This is the confirm step.")
     return 0
 
 
@@ -323,17 +322,11 @@ def cmd_run(args) -> int:
         companies.append({"name": f"{source} (remote jobs)", "platform": source, "board": "remote"})
     if remote:
         print(f"Searching remote jobs open to {settings['remote_country'] or 'anyone'} on: {', '.join(remote)}")
-    # Your roles are also searched on Himalayas, across every company that posts there. These are remote jobs, so
-    # when Remote is not one of your places they rank below jobs in your cities; they are skipped only if you
-    # chose to remove jobs outside your places.
+    # With Remote chosen, Himalayas is also searched for each of your roles, which reaches matching jobs too far
+    # down its feed to be read in full.
     queries = list(dict.fromkeys(title for profile in profiles for title in clean_list(profile.get("titles", []))))
-    role_search = bool(queries) and "himalayas" in settings["remote_sources"] and (
-        "himalayas" in remote or settings["location_mode"] != "require")
-    if role_search and "himalayas" not in remote:
-        companies.append({"name": "himalayas (remote jobs for your roles)", "platform": "himalayas", "board": "roles"})
-    if role_search:
-        print(f"Searching Himalayas for remote jobs open to {settings['remote_country'] or 'anyone'} "
-              f"in your roles: {', '.join(queries)}")
+    if "himalayas" in remote and queries:
+        print(f"  and Himalayas for your roles: {', '.join(queries)}")
     else:
         queries = []
     if not companies:
@@ -348,8 +341,7 @@ def cmd_run(args) -> int:
         if platform == "alerts":
             return alert_jobs
         if platform in REMOTE_SOURCES:
-            return fetch_remote(platform, settings, now, http_get_json, time.sleep, args.cache,
-                                queries=queries, full=board != "roles")
+            return fetch_remote(platform, settings, now, http_get_json, time.sleep, args.cache, queries=queries)
         return fetch_board(platform, board, name)
 
     print_profiles(profiles)
