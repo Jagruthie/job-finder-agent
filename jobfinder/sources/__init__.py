@@ -40,7 +40,7 @@ def ssl_context() -> ssl.SSLContext:
     return context
 
 
-def http_get_json(url: str, timeout: int = 20) -> Any:
+def http_get_json(url: str, timeout: int = 60) -> Any:   # a large company's full job list can take 20 seconds
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=timeout, context=ssl_context()) as response:

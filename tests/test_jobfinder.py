@@ -988,8 +988,8 @@ class SkillsFirstTests(unittest.TestCase):
                 "Core skills - Talent Acquisition | Payroll | HRMS\n"
                 "Education: B.Tech, JNTU Hyderabad, 2024\n"
                 "I built a payment service in Java, deployed on AWS, with tests.")
-        self.assertEqual(VOCAB.resume_phrases(text),
-                         ["Java", "Spring Boot", "AWS", "Docker", "Kubernetes", "Talent Acquisition", "Payroll", "HRMS"])
+        # Java, AWS, Docker and Kubernetes are built-in skills, so they are found anyway and not repeated here.
+        self.assertEqual(VOCAB.resume_phrases(text), ["Spring Boot", "Talent Acquisition", "Payroll", "HRMS"])
 
     def test_title_not_listed_but_enough_skills_is_kept_in_your_city_only(self):
         analyst = {"name": "data", "skills": ["SQL", "Python", "Power BI", "Tableau"], "titles": []}
@@ -998,8 +998,8 @@ class SkillsFirstTests(unittest.TestCase):
                                         self.job("2", "Insights Associate", text, location="Austin, TX"),
                                         self.job("3", "Insights Associate", "SQL and Python only.")], [analyst])
         self.assertEqual([r["Apply link"][-1] for r in rows], ["1"])        # 2: wrong city, 3: only 2 skills
-        self.assertEqual(rows[0]["Matched by"], "skills: Python, SQL, Power BI, Tableau")
-        self.assertIn("Power BI", rows[0]["Matched skills"])                  # your own skill, not in the built-in list
+        self.assertEqual(rows[0]["Matched by"], "skills: Power BI, Python, SQL, Tableau")
+        self.assertIn("Power BI", rows[0]["Matched skills"])
         self.assertEqual(stats["kept_by_skills"], 1)
 
     def test_titles_only_mode_and_title_matches_rank_first(self):
@@ -1008,7 +1008,7 @@ class SkillsFirstTests(unittest.TestCase):
         jobs = [self.job("1", "Insights Associate", text), self.job("2", "Business Analyst", text)]
         rows, _, _ = self.run_jobs(jobs, [profile])
         self.assertEqual([(r["Apply link"][-1], r["Matched by"]) for r in rows],
-                         [("2", "role title"), ("1", "skills: Data Analysis, SQL, Power BI, Tableau")])
+                         [("2", "role title"), ("1", "skills: Data Analysis, Power BI, SQL, Tableau")])
         rows, _, _ = self.run_jobs(jobs, [profile], match_by="titles")
         self.assertEqual([r["Apply link"][-1] for r in rows], ["2"])
 
@@ -1046,7 +1046,7 @@ class SkillsFirstTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             resume = os.path.join(tmp, "cv.txt")
             with open(resume, "w") as handle:
-                handle.write("Tools: Kubernetes, Terraform, Ansible, Prometheus, Grafana\n")
+                handle.write("Tools: Ansible, Prometheus, Grafana, Nagios, Puppet\n")
             folder = os.path.join(tmp, "profiles")
             said = []
             queue = ["", "", "", "", "none", resume, "ops", "", "", "", "", ""]   # ..., skills, roles, deal-breakers, priority
@@ -1054,7 +1054,7 @@ class SkillsFirstTests(unittest.TestCase):
                       ask=lambda prompt: queue.pop(0))
             with open(os.path.join(folder, "ops.json")) as handle:
                 saved = json.load(handle)
-            self.assertEqual(saved["skills"], ["Kubernetes", "Terraform", "Ansible", "Prometheus", "Grafana"])
+            self.assertEqual(saved["skills"], ["Ansible", "Prometheus", "Grafana", "Nagios", "Puppet"])
             self.assertEqual(saved["titles"], [])
             self.assertTrue(any("leave them empty" in line for line in said))
 
@@ -1193,7 +1193,8 @@ class PriorityAndDealBreakerTests(unittest.TestCase):
                 json.dump({"name": "pm", "skills": ["Product Management", "Roadmapping", "SQL", "Python"],
                            "titles": ["Associate Product Manager", "Business Analyst"]}, handle)
             said, asked = [], []
-            answers = ["", "", "", "", "none", "", "", "", "banana", "coding", ""]
+            # ..., resume, skills, categories (the one with the saved roles comes first), split track, roles, ...
+            answers = ["", "", "", "", "none", "", "", "", "", "", "banana", "coding", ""]
             def ask(prompt):
                 asked.append(prompt)
                 return answers.pop(0)
@@ -1203,6 +1204,201 @@ class PriorityAndDealBreakerTests(unittest.TestCase):
             self.assertEqual(saved["deal_breakers"], ["Coding"])
             self.assertEqual(saved["priority_skills"], ["Product Management", "Roadmapping"])
             self.assertTrue(any("Please type one of: Coding" in line for line in said))
+
+
+
+def answer_by_prompt(answers, asked=None):
+    """An ask() that answers by the words in each prompt; anything not listed gets Enter."""
+    def ask(prompt):
+        if asked is not None:
+            asked.append(prompt)
+        for words, answer in answers:
+            if words in prompt:
+                return answer.pop(0) if isinstance(answer, list) else answer
+        return ""
+    return ask
+
+
+class DataEngineerTrialTests(unittest.TestCase):
+    """From a real trial: a data engineer found no jobs. Each test is one cause, fixed."""
+    RESUME = ("Kamal P | Hyderabad | kamal@example.com\n"
+              "Data Engineer | Acme Analytics | 2022 - Present\n"
+              "Built ETL/ELT pipelines on AWS and modelled the warehouse.\n"
+              "Skills: SQL, Python, PySpark, Airflow, dbt, Bash, Spring Boot\n"
+              "Cloud: AWS (S3, RDS, Redshift, EC2), Glue, Lambda, VPC\n")
+
+    def job(self, job_id, title, text, location="Hyderabad", days=1):
+        return Job("demo", "x", "Acme", job_id, title, location, f"https://e/{job_id}", text,
+                   None if days is None else NOW - timedelta(days=days))
+
+    def run_jobs(self, jobs, profiles, state=None, now=NOW, **settings):
+        state = state if state is not None else {"first_seen": {}, "dropped": {}}
+        rows, stats, _ = run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], profiles,
+                                      {"preferred_locations": ["Hyderabad"], "max_experience_years": 4, **settings},
+                                      VOCAB, state, lambda p, b, n: jobs, now=now)
+        return rows, stats, state
+
+    def test_resume_gives_data_roles_and_skills_without_editing_any_file(self):
+        self.assertEqual(VOCAB.resume_phrases(self.RESUME), ["Spring Boot"])     # brackets split; known ones found anyway
+        skills = VOCAB.extract_skills(self.RESUME)
+        for skill in ("AWS", "Apache Spark", "Airflow", "dbt", "ETL/ELT", "Redshift", "Shell Scripting"):
+            self.assertIn(skill, skills)
+        self.assertEqual(VOCAB.resume_titles(self.RESUME)[0], "Data Engineer")
+        self.assertEqual(VOCAB.role_groups(skills)[0][0], "Data & Engineering")
+        with tempfile.TemporaryDirectory() as tmp:
+            resume = os.path.join(tmp, "cv.txt")
+            with open(resume, "w") as handle:
+                handle.write(self.RESUME)
+            said = []
+            ask = answer_by_prompt([("Path to your resume", resume), ("Short name", "kp"), ("Pay [", "none")])
+            run_setup(os.path.join(tmp, "settings.json"), os.path.join(tmp, "profiles"), VOCAB,
+                      say=said.append, ask=ask)
+            with open(os.path.join(tmp, "profiles", "kp.json")) as handle:
+                saved = json.load(handle)
+        self.assertEqual(saved["titles"][0], "Data Engineer")
+        self.assertIn("Spring Boot", saved["skills"])
+        self.assertFalse([s for s in saved["skills"] if "(" in s])
+        self.assertTrue(any("Roles named in your resume: Data Engineer" in line for line in said))
+
+    def test_mistyped_role_is_offered_the_built_in_spelling(self):
+        self.assertEqual(VOCAB.closest_title("Data Enginner"), "Data Engineer")
+        self.assertEqual(VOCAB.closest_title("data engineer"), None)             # already right
+        self.assertEqual(VOCAB.closest_title("Growth Hacker"), None)             # nothing close: kept as typed
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = os.path.join(tmp, "profiles")
+            os.makedirs(folder)
+            with open(os.path.join(folder, "kp.json"), "w") as handle:
+                json.dump({"name": "kp", "skills": ["SQL", "Python", "Airflow"], "titles": ["Data Analyst"]}, handle)
+            asked = []
+            ask = answer_by_prompt([("Pay [", "none"), ("  Roles [", "Data Enginner, Data Analyst, Growth Hacker"),
+                                    ("Did you mean", "")], asked)
+            run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=lambda s: None, ask=ask)
+            with open(os.path.join(folder, "kp.json")) as handle:
+                saved = json.load(handle)
+        self.assertEqual(saved["titles"], ["Data Engineer", "Data Analyst", "Growth Hacker"])
+        self.assertEqual(sum("Did you mean 'Data Engineer'" in prompt for prompt in asked), 1)
+
+    def test_same_resume_twice_is_not_made_into_two_profiles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            resume = os.path.join(tmp, "cv.txt")
+            with open(resume, "w") as handle:
+                handle.write(self.RESUME)
+            said = []
+            ask = answer_by_prompt([("Pay [", "none"), ("Path to your resume", resume),
+                                    ("Path to another resume", [resume, ""]), ("Short name", "kp")])
+            run_setup(os.path.join(tmp, "settings.json"), os.path.join(tmp, "profiles"), VOCAB,
+                      say=said.append, ask=ask)
+            self.assertEqual(os.listdir(os.path.join(tmp, "profiles")), ["kp.json"])
+        self.assertTrue(any("You already gave this resume (profile 'kp')" in line for line in said))
+
+    def test_a_priority_skill_not_in_the_skills_still_counts_and_one_is_enough(self):
+        profile = {"name": "kp", "skills": ["SQL", "Python", "Airflow"], "titles": [], "priority_skills": ["Data Engineering"]}
+        prepared = prepare_profile(profile, VOCAB)
+        self.assertIn("Data Engineering", prepared["_skills"])
+        self.assertEqual(prepared["_core_needed"], 1)
+        rows, stats, _ = self.run_jobs([self.job("1", "Platform Associate",
+                                                 "2 years of experience. Data pipelines with SQL, Python and Airflow.")],
+                                       [profile])
+        self.assertEqual([r["Apply link"][-1] for r in rows], ["1"])
+        self.assertEqual(stats["kept_by_skills"], 1)
+
+    def test_allowing_older_jobs_brings_back_jobs_removed_earlier(self):
+        profile = {"name": "kp", "skills": ["SQL"], "titles": ["Data Engineer"]}
+        jobs = [self.job("1", "Data Engineer", "SQL.", days=10)]
+        rows, stats, state = self.run_jobs(jobs, [profile], freshness_days=7)
+        self.assertEqual((len(rows), stats["stale_dropped"]), (0, 1))
+        rows, stats, state = self.run_jobs(jobs, [profile], state=state, freshness_days=7)   # still gone, not new
+        self.assertEqual((len(rows), stats["already_dropped"]), (0, 1))
+        rows, _, state = self.run_jobs(jobs, [profile], state=state, freshness_days=15)      # wider window: back
+        self.assertEqual(len(rows), 1)
+        self.assertNotIn("demo:x:1", state["dropped"])
+
+    def test_older_memory_files_still_work(self):
+        profile = {"name": "kp", "skills": ["SQL"], "titles": ["Data Engineer"]}
+        jobs = [self.job("1", "Data Engineer", "SQL.", days=10), self.job("2", "Data Engineer", "SQL.", days=None)]
+        old = {"first_seen": {}, "dropped": {"demo:x:1": "2026-10-19", "demo:x:2": "2026-10-19"}}  # day removed only
+        rows, stats, _ = self.run_jobs(jobs, [profile], state=old, freshness_days=15)
+        self.assertEqual([r["Apply link"][-1] for r in rows], ["1"])      # dated: checked again by its own date
+        self.assertEqual(stats["already_dropped"], 1)                     # undated: its age is unknown, so it stays gone
+
+    def test_other_cities_means_other_cities_in_your_country_not_abroad(self):
+        profile = {"name": "kp", "skills": ["SQL"], "titles": ["Data Analyst"]}
+        rows, stats, _ = self.run_jobs([self.job("1", "Data Analyst", "SQL.", location="Pune"),
+                                        self.job("2", "Data Analyst", "SQL.", location="Mohali, IND"),
+                                        self.job("3", "Data Analyst", "SQL.", location="Bangkok"),
+                                        self.job("4", "Data Analyst", "SQL.", location="Remote - USA"),
+                                        self.job("5", "Data Analyst", "SQL.", location="Remote (open to India)")],
+                                       [profile])
+        self.assertEqual(sorted(r["Apply link"][-1] for r in rows), ["1", "2", "5"])
+        self.assertEqual(stats["location_dropped"], 2)
+        rows, _, _ = self.run_jobs([self.job("3", "Data Analyst", "SQL.", location="Bangkok")], [profile],
+                                   remote_country="")                                   # no country set: anywhere
+        self.assertEqual(len(rows), 1)
+
+    def test_senior_titles_are_judged_by_their_years_once_you_allow_3_or_more(self):
+        profile = {"name": "kp", "skills": ["SQL"], "titles": ["Data Engineer"]}
+        jobs = [self.job("1", "Senior Data Engineer", "SQL. 3-5 years of experience."),
+                self.job("2", "Senior Data Engineer", "SQL. 7+ years of experience."),
+                self.job("3", "Lead Data Engineer", "SQL. 3 years of experience.")]
+        rows, _, _ = self.run_jobs(jobs, [profile])                                     # 4 years allowed
+        self.assertEqual([r["Apply link"][-1] for r in rows], ["1"])
+        rows, _, _ = self.run_jobs(jobs, [profile], max_experience_years=1)
+        self.assertEqual(rows, [])
+
+    def test_level_marks_follow_the_years_you_set(self):
+        self.assertTrue(filters.higher_level_title("Data Engineer II"))           # default: 1 year
+        self.assertFalse(filters.higher_level_title("Data Engineer II", 4))
+        self.assertTrue(filters.higher_level_title("Data Engineer III", 4))
+        rows, _, _ = self.run_jobs([self.job("1", "Data Engineer II", "SQL, Python. 3+ years of experience.")],
+                                   [{"name": "kp", "skills": ["SQL", "Python"], "titles": ["Data Engineer"]}])
+        self.assertEqual(len(rows), 1)
+
+
+class FindingJobsTests(unittest.TestCase):
+    """The agent finds jobs by itself: a built-in company list, and a search for your roles."""
+
+    def test_himalayas_is_searched_for_each_role(self):
+        from jobfinder.sources.remote import fetch_himalayas
+        urls = []
+
+        def feed(url):
+            urls.append(url)
+            if "page=1" not in url:
+                return {"jobs": []}
+            return {"jobs": [{"guid": "g1", "title": "Data Engineer", "companyName": "Kite (fake)",
+                              "locationRestrictions": ["India"], "pubDate": int(NOW.timestamp()),
+                              "applicationLink": "https://himalayas.app/x", "description": "SQL."}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs = fetch_himalayas(feed, "India", 7, NOW, lambda s: None, cache_dir=tmp,
+                                   queries=["Data Engineer", "Data Analyst"], full=False)
+            self.assertEqual(sorted(os.listdir(tmp)), ["himalayas-india-search-data-analyst-2026-10-21.json",
+                                                       "himalayas-india-search-data-engineer-2026-10-21.json"])
+        self.assertTrue(all("q=Data%20" in url for url in urls))
+        self.assertEqual([j.title for j in jobs], ["Data Engineer"])       # the same job in two searches appears once
+
+    def test_job_lists_are_read_side_by_side_and_failures_stay_per_company(self):
+        from jobfinder.cli import prefetch
+        companies = [{"name": "A", "platform": "greenhouse", "board": "a"},
+                     {"name": "B", "platform": "greenhouse", "board": "b"},
+                     {"name": "C", "platform": "lever", "board": "c"}]
+
+        def fetch(platform, board, name):
+            if board == "b":
+                raise ConnectionResetError("reset by peer")
+            if board == "c":
+                raise SourceError("not found")
+            return ["job"]
+        fetched = prefetch(companies, fetch, 1.5, sleep=lambda s: None)
+        self.assertEqual(fetched.read("greenhouse", "a", "A"), ["job"])
+        for platform, board, name in (("greenhouse", "b", "B"), ("lever", "c", "C")):
+            with self.assertRaises(SourceError):
+                fetched.read(platform, board, name)
+
+    def test_starter_list_is_large_and_spans_the_three_platforms(self):
+        companies = read_companies(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                                "data", "companies-starter.csv"))
+        self.assertGreaterEqual(len(companies), 100)
+        self.assertEqual({c["platform"] for c in companies}, {"greenhouse", "lever", "ashby"})
 
 
 if __name__ == "__main__":

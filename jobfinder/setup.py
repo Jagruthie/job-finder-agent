@@ -112,7 +112,8 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
     settings["preferred_locations"] = _ask_list(
         ask, 1, "Cities you prefer, comma separated", current["preferred_locations"])
     settings["location_mode"] = _ask_mode(
-        ask, say, 2, "Jobs in other cities: keep them (ranked lower) or remove them?", current["location_mode"])
+        ask, say, 2, f"Jobs in other cities{' of ' + current['remote_country'] if current['remote_country'] else ''}: "
+        "keep them (ranked lower) or remove them?", current["location_mode"])
     settings["max_experience_years"] = _ask_int(
         ask, say, 3, "Most years of experience a job may ask for", current["max_experience_years"])
     settings["freshness_days"] = _ask_int(
@@ -152,25 +153,33 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
         skills, titles = clean_list(saved_skills), clean_list(saved_titles)
         name = profile.get("name", file.stem)
         say(f"\nProfile '{name}'")
+        resume_roles = from_resume[file][1] if file in from_resume and split_skills is None else []
         if split_skills is not None:
             new_skills = split_skills
             say(f"  Uses the same skills, and searches: {', '.join(split_categories)}")
         else:
             if file in from_resume:
-                skills, hint = from_resume[file], "Enter accepts these"
+                skills, hint = from_resume[file][0], "Enter accepts these"
                 say("  Skills found in your resume:")
             else:
                 hint = "Enter keeps these"
             new_skills = _ask_profile_list(ask, say, "Skills", skills, hint, "SEO, Keyword Research", required=False)
             unknown = [s for s in new_skills if s not in vocab.skills]
             if unknown:
-                say("  Not in the built-in list, so these are matched by their exact words in job posts: "
+                say("  Your own skills, matched by their exact words in job posts (no file to edit): "
                     + ", ".join(unknown))
-        # Roles come from the confirmed skills (each needs at least 2 of them), grouped by category.
+        if resume_roles:
+            say(f"  Roles named in your resume: {', '.join(resume_roles)}")
+        # Roles come from the confirmed skills (each needs at least 2 of them), grouped by category. The category
+        # of the roles you already chose, or that your resume names, comes first.
         groups = vocab.role_groups(new_skills)
+        preferred = [vocab.category(t) for t in titles + resume_roles if t in vocab.titles]
+        groups.sort(key=lambda group: preferred.index(group[0]) if group[0] in preferred else len(preferred))
         if groups:
             chosen = split_categories or _ask_categories(ask, say, name, groups)
             default = [title for category, matches in groups if category in chosen for title, _, _ in matches]
+            default = list(dict.fromkeys(
+                [r for r in resume_roles if r not in vocab.titles or vocab.category(r) in chosen] + default))
             hint = "Enter accepts these"
             others = [category for category, _ in groups if category not in chosen]
             if others and split_skills is None:
@@ -178,6 +187,8 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
                 if split:
                     taken.add(split)
                     queue.append((split, new_skills, others))
+        elif resume_roles:
+            default, hint = resume_roles, "Enter accepts these"
         else:
             say("  None of the built-in roles needs 2 or more of these skills.")
             default, hint = titles, "Enter keeps these"
@@ -189,7 +200,8 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
             hint = "Enter leaves them empty"
         if titles and titles != default:
             say(f"  Roles saved now: {', '.join(titles)}")
-        new_titles = _ask_profile_list(ask, say, "Roles", default, hint, "SEO Executive", required=not skills_only_ok)
+        new_titles = _fix_typos(ask, say, vocab, _ask_profile_list(ask, say, "Roles", default, hint, "SEO Executive",
+                                                                   required=not skills_only_ok))
         saved_breakers, saved_priority = profile.get("deal_breakers", []), profile.get("priority_skills", [])
         new_breakers = _ask_deal_breakers(ask, say, vocab, clean_list(saved_breakers))
         avoided = {s for group in new_breakers for s in vocab.deal_breakers[group].get("skills", [])}
@@ -199,6 +211,10 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
         say("  Priority skills: what this track's jobs should mainly be about. Jobs needing more of them rank higher.")
         new_priority = _ask_profile_list(ask, say, "Priority skills", priority_default, "Enter accepts these",
                                          "Roadmapping, User Research", required=False)
+        added = [s for s in new_priority if s not in new_skills]
+        if added:
+            say(f"  Added to this track's skills too: {', '.join(added)}")
+            new_skills = new_skills + added
         if (file.exists() and new_skills == saved_skills and new_titles == saved_titles
                 and new_breakers == saved_breakers and new_priority == saved_priority):
             continue
@@ -215,10 +231,11 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
 
 
 def _ask_resumes(ask: Ask, say: Say, profiles_dir: Path, vocab: Vocab, read_resume: Callable[[str], str]) -> dict:
-    """Ask for resume files, one per profile, and read the skills in each.
-    Returns {profile file: skills found}. Resumes are read on this computer and never saved or uploaded."""
+    """Ask for resume files, one per profile, and read the skills and role titles in each.
+    Returns {profile file: (skills found, roles named)}. Resumes are read on this computer and never saved or uploaded."""
     say("\nYour resume is read on this computer only. Nothing is uploaded and the file is not copied.")
     found = {}
+    read = {}   # resume file -> profile name, so the same resume is not made into two profiles by mistake
     while True:
         prompt = "another resume" if found else "your resume"
         answer = ask(f"  Path to {prompt} (.docx, .pdf, .txt or .md), or press Enter to "
@@ -228,6 +245,10 @@ def _ask_resumes(ask: Ask, say: Say, profiles_dir: Path, vocab: Vocab, read_resu
         resume = Path(answer.strip("'\"").replace("\\ ", " ")).expanduser()   # drag-and-drop adds quotes or "\ "
         if not resume.is_file():
             say(f"  Could not find a file at {resume}. Check the path, or drag the file into this window.")
+            continue
+        if resume.resolve() in read:
+            say(f"  You already gave this resume (profile '{read[resume.resolve()]}'). One resume makes one profile; "
+                "to search two kinds of roles from it, setup offers a second track after you pick its roles.")
             continue
         try:
             text = read_resume(str(resume))
@@ -245,7 +266,27 @@ def _ask_resumes(ask: Ask, say: Say, profiles_dir: Path, vocab: Vocab, read_resu
         file = profiles_dir / f"{name}.json"
         if file.exists():
             say(f"  Profile '{name}' already exists. You will confirm the skills from this resume before it changes.")
-        found[file] = skills
+        found[file] = (skills, vocab.resume_titles(text))
+        read[resume.resolve()] = name
+
+
+def _fix_typos(ask: Ask, say: Say, vocab: Vocab, roles: List[str]) -> List[str]:
+    """Offer the built-in spelling for a role that looks mistyped ('Data Enginner'), since a role is matched
+    by its exact words and a misspelled one finds nothing."""
+    fixed = []
+    for role in roles:
+        close = vocab.closest_title(role)
+        while close:
+            answer = ask(f"  Did you mean '{close}' instead of '{role}'? (yes or no) [yes]: ").strip().lower()
+            if answer in ("", "y", "yes"):
+                role = close
+            elif answer not in ("n", "no"):
+                say("  Please type yes or no.")
+                continue
+            break
+        if role not in fixed:
+            fixed.append(role)
+    return fixed
 
 
 def _ask_deal_breakers(ask: Ask, say: Say, vocab: Vocab, current: List[str]) -> List[str]:

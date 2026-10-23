@@ -60,16 +60,17 @@ _ENTRY_WORDS = {"associate", "junior", "jr", "trainee", "graduate", "grad", "fre
                 "apprentice", "intern"}
 # "Product Manager I" or "Product Manager 1, Growth", but not "IBM i" or "L1/L2 support".
 _ENTRY_LEVEL_MARK = re.compile(r"(?<![\w/])(?:I|1|L1)(?=\s*(?:$|[,(|–-]))")
-# Level marks for jobs above entry level, such as "Product Manager II".
-_HIGHER_LEVELS = {"ii", "iii", "iv", "l2", "l3", "l4"}
+# Level marks for jobs above entry level, such as "Product Manager II", and the years each one usually asks for.
+_HIGHER_LEVELS = {"ii": 2, "l2": 2, "iii": 5, "l3": 5, "iv": 8, "l4": 8}
 
 
 def entry_level_title(job_title: str) -> bool:
     return bool(set(norm(job_title).split()) & _ENTRY_WORDS or _ENTRY_LEVEL_MARK.search(job_title or ""))
 
 
-def higher_level_title(job_title: str) -> bool:
-    return bool(set(norm(job_title).split()) & _HIGHER_LEVELS)
+def higher_level_title(job_title: str, max_years: int = 1) -> bool:
+    """True if the title has a level mark above your experience: II or L2 is fine from 2 years, III from 5."""
+    return any(_HIGHER_LEVELS[mark] > max_years for mark in set(norm(job_title).split()) & _HIGHER_LEVELS.keys())
 
 
 def has_excluded_word(job_title: str, words: List[str], role_phrases: List[str] = ()) -> bool:
@@ -82,7 +83,10 @@ def has_excluded_word(job_title: str, words: List[str], role_phrases: List[str] 
 
 
 INDIA_PLACES = ["india", "bengaluru", "bangalore", "hyderabad", "mumbai", "delhi", "gurgaon", "gurugram", "noida",
-                "pune", "chennai", "kolkata", "ahmedabad", "telangana", "karnataka", "maharashtra"]
+                "pune", "chennai", "kolkata", "ahmedabad", "telangana", "karnataka", "maharashtra",
+                "mohali", "chandigarh", "jaipur", "kochi", "coimbatore", "thiruvananthapuram", "trivandrum", "indore",
+                "bhubaneswar", "visakhapatnam", "vadodara", "nagpur", "lucknow", "mysuru", "mysore", "mangaluru",
+                "tamil nadu", "kerala", "gujarat", "haryana", "west bengal", "uttar pradesh", "ind"]
 _ANYWHERE = {"remote", "work", "from", "home", "anywhere", "worldwide", "global", "fully", "first"}
 
 
@@ -95,6 +99,17 @@ def remote_in(location_norm: str, country: str) -> bool:
     if any(has_phrase(location_norm, place) for place in places):
         return True
     return set(location_norm.split()) <= _ANYWHERE
+
+
+def in_country(location: str, country: str = "India") -> bool:
+    """True if a job is in your country (any city of it) or remote and open to it. A job with no location
+    given is kept, since nothing says it is elsewhere."""
+    location_norm = norm(location)
+    if not country or not location_norm:
+        return True
+    places = INDIA_PLACES if norm(country) == "india" else [norm(country)]
+    return (any(has_phrase(location_norm, place) for place in places)
+            or (has_phrase(location_norm, "remote") and remote_in(location_norm, country)))
 
 
 def location_matches(location: str, wanted: List[str], remote_country: str = "India") -> bool:

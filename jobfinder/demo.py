@@ -26,6 +26,7 @@ def demo_data(now: datetime) -> Tuple[List[dict], Dict[str, List[Job]]]:
         {"name": "Kite Analytics (fake)", "platform": "demo", "board": "kite", "email": "", "x_handle": "@kite_ceo"},
         {"name": "Lumen Content (fake)", "platform": "demo", "board": "lumen",
          "email": "hello@lumen.example", "x_handle": ""},
+        {"name": "Delta Data Labs (fake)", "platform": "demo", "board": "delta", "email": "", "x_handle": ""},
     ]
 
     jobs = {
@@ -62,6 +63,17 @@ def demo_data(now: datetime) -> Tuple[List[dict], Dict[str, List[Job]]]:
                 "Generative engine optimization and SEO."),
             job("lumen", companies[2]["name"], "304", "Growth Associate", "Hyderabad", None,
                 "Cold outreach, social media and metrics. No date on this posting."),
+        ],
+        "delta": [
+            job("delta", companies[3]["name"], "401", "Data Engineer", "Hyderabad", 2,
+                "2-4 years of experience. Build ETL pipelines in Python, SQL and PySpark, orchestrate them with "
+                "Airflow, and model the Redshift data warehouse on AWS.", pay="INR 14-18 LPA"),
+            job("delta", companies[3]["name"], "402", "Data Analyst", "Bengaluru", 4,
+                "1-3 years of experience. SQL, Excel and Power BI dashboards for the sales team."),
+            job("delta", companies[3]["name"], "403", "Senior Data Engineer", "Chennai", 3,
+                "8+ years of experience leading the data platform team. Spark, Kafka, Airflow."),
+            job("delta", companies[3]["name"], "404", "Data Engineer", "Singapore", 1,
+                "1-3 years of experience. SQL and Python."),
         ],
     }
     return companies, jobs

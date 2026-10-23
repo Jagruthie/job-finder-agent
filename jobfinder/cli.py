@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
@@ -23,6 +24,44 @@ from .vocab import Vocab
 
 
 STARTER_COMPANIES = Path(__file__).resolve().parent.parent / "data" / "companies-starter.csv"
+
+
+class Fetched:
+    """Job lists read ahead of screening, handed out in the order the pipeline asks for them."""
+
+    def __init__(self):
+        self.results = {}
+
+    def read(self, platform: str, board: str, name: str):
+        result = self.results[(platform, board, name)]
+        if isinstance(result, SourceError):
+            raise result
+        return result
+
+
+def prefetch(companies: List[dict], fetch, delay: float, sleep=time.sleep) -> Fetched:
+    """Read every job list first: each site (Greenhouse, Lever, Ashby, Himalayas...) one request at a time with
+    the polite delay between them, and the sites side by side, so many companies do not take many minutes."""
+    by_site = {}
+    for company in companies:
+        by_site.setdefault(company["platform"], []).append(company)
+    fetched = Fetched()
+
+    def read_site(items: List[dict]) -> None:
+        for index, company in enumerate(items):
+            if index:
+                sleep(delay)
+            key = (company["platform"], company["board"], company["name"])
+            try:
+                fetched.results[key] = fetch(*key)
+            except SourceError as error:
+                fetched.results[key] = error
+            except Exception as error:   # a dropped connection or a malformed reply fails one company, not the run
+                fetched.results[key] = SourceError(f"{type(error).__name__}: {error}")
+
+    with ThreadPoolExecutor(max_workers=max(1, len(by_site))) as pool:
+        list(pool.map(read_site, by_site.values()))
+    return fetched
 
 
 def load_settings(path: str) -> dict:
@@ -284,6 +323,19 @@ def cmd_run(args) -> int:
         companies.append({"name": f"{source} (remote jobs)", "platform": source, "board": "remote"})
     if remote:
         print(f"Searching remote jobs open to {settings['remote_country'] or 'anyone'} on: {', '.join(remote)}")
+    # Your roles are also searched on Himalayas, across every company that posts there. These are remote jobs, so
+    # when Remote is not one of your places they rank below jobs in your cities; they are skipped only if you
+    # chose to remove jobs outside your places.
+    queries = list(dict.fromkeys(title for profile in profiles for title in clean_list(profile.get("titles", []))))
+    role_search = bool(queries) and "himalayas" in settings["remote_sources"] and (
+        "himalayas" in remote or settings["location_mode"] != "require")
+    if role_search and "himalayas" not in remote:
+        companies.append({"name": "himalayas (remote jobs for your roles)", "platform": "himalayas", "board": "roles"})
+    if role_search:
+        print(f"Searching Himalayas for remote jobs open to {settings['remote_country'] or 'anyone'} "
+              f"in your roles: {', '.join(queries)}")
+    else:
+        queries = []
     if not companies:
         print("No companies found and no job-alert emails. Add rows to companies.csv "
               f"or save alert emails (.eml) in {args.inbox}/.")
@@ -296,13 +348,20 @@ def cmd_run(args) -> int:
         if platform == "alerts":
             return alert_jobs
         if platform in REMOTE_SOURCES:
-            return fetch_remote(platform, settings, now, http_get_json, time.sleep, args.cache)
+            return fetch_remote(platform, settings, now, http_get_json, time.sleep, args.cache,
+                                queries=queries, full=board != "roles")
         return fetch_board(platform, board, name)
 
     print_profiles(profiles)
+    sites = {company["platform"] for company in companies}
+    longest = max(sum(c["platform"] == site for c in companies) for site in sites)
+    print(f"\nReading {len(companies)} job lists, {len(sites)} sites side by side "
+          f"(about {max(1, round(longest * (settings['request_delay_seconds'] + 5) / 60))} min)...")
+    fetched = prefetch(companies, fetch, settings["request_delay_seconds"])
     try:
         rows, stats, failures = run_pipeline(companies, profiles, settings, vocab, state,
-                                             fetch, now=now, sleep=time.sleep)
+                                             lambda platform, board, name: fetched.read(platform, board, name),
+                                             now=now)
     except ProfileError as error:
         print(f"\n{error}")
         return 1

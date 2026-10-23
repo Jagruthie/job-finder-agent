@@ -53,7 +53,38 @@
     "JavaScript": ["javascript", "typescript", "node js", "nodejs"],
     "React/Next.js": ["react", "next js", "nextjs"],
     "Git/GitHub": ["github", "git"],
-    "APIs": ["api", "apis"]
+    "APIs": ["api", "apis"],
+    "Data Engineering": ["data engineering", "data pipelines", "data pipeline", "data platform", "data platforms"],
+    "ETL/ELT": ["etl", "elt", "etl/elt", "data integration", "data ingestion"],
+    "Apache Spark": ["spark", "pyspark", "apache spark", "spark sql", "spark streaming"],
+    "Airflow": ["airflow", "apache airflow", "workflow orchestration", "dagster", "prefect"],
+    "dbt": ["dbt", "data build tool"],
+    "Data Warehousing": ["data warehouse", "data warehouses", "data warehousing", "data lake", "data lakes", "lakehouse", "data lakehouse"],
+    "Data Modeling": ["data modeling", "data modelling", "data models", "dimensional modeling", "dimensional modelling", "dimensional data models", "star schema"],
+    "Snowflake": ["snowflake"],
+    "Databricks": ["databricks", "delta lake"],
+    "BigQuery": ["bigquery", "big query"],
+    "Redshift": ["redshift", "amazon redshift", "aws redshift"],
+    "AWS": ["aws", "amazon web services", "s3", "ec2", "rds", "emr", "athena", "aws glue", "aws lambda", "lambda", "glue", "vpc", "kinesis"],
+    "Azure": ["azure", "azure data factory", "adf", "synapse"],
+    "GCP": ["gcp", "google cloud", "dataflow", "dataproc"],
+    "Kafka": ["kafka", "apache kafka", "flink", "event streaming"],
+    "Hadoop": ["hadoop", "hive", "hdfs", "presto", "trino"],
+    "NoSQL": ["nosql", "mongodb", "cassandra", "dynamodb"],
+    "Power BI": ["power bi", "powerbi"],
+    "Tableau": ["tableau"],
+    "Looker": ["looker", "looker studio"],
+    "Statistics": ["statistics", "statistical", "regression", "hypothesis testing"],
+    "Machine Learning": ["machine learning", "deep learning", "scikit learn", "sklearn", "ml models"],
+    "Pandas": ["pandas", "numpy"],
+    "Java": ["java"],
+    "Scala": ["scala"],
+    "Shell Scripting": ["bash", "shell scripting", "shell script", "shell scripts"],
+    "Linux": ["linux", "unix"],
+    "Docker/Kubernetes": ["docker", "kubernetes", "k8s"],
+    "CI/CD": ["ci/cd", "ci cd", "jenkins", "github actions"],
+    "Terraform": ["terraform", "infrastructure as code"],
+    "Data Governance": ["data governance", "data quality", "data lineage", "data catalog"]
   },
   "deal_breakers": {
     "Coding": {
@@ -197,6 +228,46 @@
       "category": "Growth & Marketing",
       "aliases": ["growth executive", "growth marketing associate", "growth intern"],
       "skills": ["Cold Outreach", "Social Media", "Metrics", "Content Strategy", "Go-to-Market"]
+    },
+    "Data Engineer": {
+      "category": "Data & Engineering",
+      "aliases": ["big data engineer", "etl developer", "etl engineer", "data pipeline engineer", "data platform engineer", "associate data engineer", "junior data engineer", "data engineer i", "data engineer 1"],
+      "skills": ["Data Engineering", "SQL", "Python", "Apache Spark", "Airflow", "ETL/ELT", "Data Warehousing", "Data Modeling", "AWS", "dbt", "Kafka"]
+    },
+    "Analytics Engineer": {
+      "category": "Data & Engineering",
+      "aliases": ["analytics engineering", "associate analytics engineer"],
+      "skills": ["SQL", "dbt", "Data Modeling", "Data Warehousing", "Python", "Looker", "Snowflake"]
+    },
+    "Data Analyst": {
+      "category": "Data & Engineering",
+      "aliases": ["associate data analyst", "junior data analyst", "business intelligence analyst", "bi analyst", "reporting analyst", "mis analyst"],
+      "skills": ["Data Analysis", "SQL", "Excel/Sheets", "Power BI", "Tableau", "Python", "Statistics", "Metrics"]
+    },
+    "BI Developer": {
+      "category": "Data & Engineering",
+      "aliases": ["business intelligence developer", "business intelligence engineer", "power bi developer", "tableau developer", "bi engineer"],
+      "skills": ["Power BI", "Tableau", "Looker", "SQL", "Data Modeling", "Data Warehousing"]
+    },
+    "Data Scientist": {
+      "category": "Data & Engineering",
+      "aliases": ["associate data scientist", "junior data scientist", "applied scientist"],
+      "skills": ["Machine Learning", "Python", "Statistics", "SQL", "Pandas", "Data Analysis"]
+    },
+    "Machine Learning Engineer": {
+      "category": "Data & Engineering",
+      "aliases": ["ml engineer", "mlops engineer", "ai engineer", "ai ml engineer"],
+      "skills": ["Machine Learning", "Python", "Docker/Kubernetes", "AWS", "Apache Spark", "APIs"]
+    },
+    "Software Engineer": {
+      "category": "Data & Engineering",
+      "aliases": ["software developer", "software development engineer", "sde", "backend engineer", "backend developer", "associate software engineer", "junior software engineer"],
+      "skills": ["Python", "Java", "JavaScript", "APIs", "Git/GitHub", "SQL", "Docker/Kubernetes", "CI/CD"]
+    },
+    "DevOps Engineer": {
+      "category": "Data & Engineering",
+      "aliases": ["cloud engineer", "site reliability engineer", "sre", "platform engineer", "devops"],
+      "skills": ["AWS", "Azure", "GCP", "Docker/Kubernetes", "Terraform", "CI/CD", "Linux", "Shell Scripting"]
     }
   }
 }

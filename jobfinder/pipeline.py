@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Tuple
 
 from .filters import (NOT_STATED, TOO_SENIOR, WITHIN, entry_level_title, experience_bucket, has_excluded_word,
-                      higher_level_title, location_matches, parse_annual_pay, pay_from_text, shift_mentioned,
+                      higher_level_title, in_country, location_matches, parse_annual_pay, pay_from_text, shift_mentioned,
                       title_matches)
 from .models import Job
 from .sources import SourceError
@@ -114,18 +114,21 @@ def prepare_profile(profile: dict, vocab: Vocab) -> dict:
     for title in clean_list(profile.get("titles", [])):
         phrases.extend(vocab.title_phrases(title))
     skills = clean_list(profile.get("skills", []))
-    # Skills you confirmed that are not in data/skills.json are matched by their own words in the job text.
-    own = [(skill, norm(skill)) for skill in skills if skill not in vocab.skills and len(norm(skill)) >= 3]
     avoid = [group for group in clean_list(profile.get("deal_breakers", [])) if group in vocab.deal_breakers]
     avoided_skills = {s for group in avoid for s in vocab.deal_breakers[group].get("skills", [])}
     priority = [s for s in clean_list(profile.get("priority_skills", [])) if s not in avoided_skills]
+    skills += [s for s in priority if s not in skills]     # a priority skill is one of your skills, listed there or not
+    # Skills you confirmed that are not in data/skills.json are matched by their own words in the job text.
+    own = [(skill, norm(skill)) for skill in skills if skill not in vocab.skills and len(norm(skill)) >= 3]
     # The specific skills this track is about: your priority skills, or else the skills your chosen roles need
     # (from data/skills.json), without broad ones such as Research and without deal-breakers. A job kept for its
-    # skills alone must need 2 of these, so a PM track does not pick up developer jobs because you know Python.
+    # skills alone must need 2 of these (or the only one, if there is one), so a PM track does not pick up
+    # developer jobs because you know Python.
     core = set(priority) or {s for title in clean_list(profile.get("titles", []))
                              for s in vocab.titles.get(title, {}).get("skills", [])} & set(skills)
+    core = core - vocab.generic - avoided_skills
     return {**profile, "_phrases": sorted(set(phrases)), "_skills": set(skills), "_own_skills": own,
-            "_core": core - vocab.generic - avoided_skills, "_priority": priority, "_avoid": avoid}
+            "_core": core, "_core_needed": min(2, len(core)), "_priority": priority, "_avoid": avoid}
 
 
 def common_skills(found_per_job: List[List[str]], share: float = 0.2, minimum_jobs: int = 20) -> set:
@@ -182,20 +185,24 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
 
         for job in jobs:
             stats["jobs_seen"] += 1
-            if job.key in dropped:
-                stats["already_dropped"] += 1
-                continue
-
+            # A removed job is remembered with its date, so it never returns as new, yet comes back if you
+            # later allow older jobs. Older memory files kept only the day of removal: an undated job saved
+            # that way stays removed, and a dated one is checked again against its own date.
+            remembered = dropped.get(job.key)
             posted, basis = job.posted_at, job.date_basis or "platform date"
             if posted is None:
                 basis = "first seen (real age unknown)"
-                posted = parse_dt(first_seen.get(job.key)) or now
-                first_seen.setdefault(job.key, now.isoformat())
+                if remembered is not None and len(remembered) <= 10:
+                    stats["already_dropped"] += 1
+                    continue
+                posted = parse_dt(remembered) or parse_dt(first_seen.get(job.key)) or now
+                first_seen.setdefault(job.key, posted.isoformat())
             if now - posted > max_age:
-                dropped[job.key] = now.date().isoformat()
+                dropped[job.key] = posted.isoformat()
                 first_seen.pop(job.key, None)
-                stats["stale_dropped"] += 1
+                stats["already_dropped" if remembered is not None else "stale_dropped"] += 1
                 continue
+            dropped.pop(job.key, None)
             text = f"{job.title}. {job.description}"
             fresh.append((company, job, posted, basis, text, vocab.extract_skills(text)))
 
@@ -215,7 +222,7 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
             specific = {}
             for profile in prepared:
                 matched, _, pct = skill_fit(profile, found, text_norm, ignore)
-                on_track = not profile["_core"] or len(profile["_core"] & set(matched)) >= 2
+                on_track = len(profile["_core"] & set(matched)) >= profile["_core_needed"]
                 if len(matched) >= cfg["skill_match_min"] and (pct or 0) >= cfg["skill_match_share"] and on_track:
                     candidates.append(profile)
                     specific[profile["name"]] = matched
@@ -235,7 +242,11 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
             stats["deal_breaker"] += 1
             continue
         role_phrases = [phrase for profile in candidates for phrase in profile["_phrases"]]
-        if has_excluded_word(job.title, cfg["exclude_title_words"], role_phrases) or higher_level_title(job.title):
+        # With 3 or more years, a "Senior" title is often within reach; the years the post asks for decide.
+        excluded = [word for word in cfg["exclude_title_words"]
+                    if not (cfg["max_experience_years"] >= 3 and norm(word) in ("senior", "sr"))]
+        if (has_excluded_word(job.title, excluded, role_phrases)
+                or higher_level_title(job.title, cfg["max_experience_years"])):
             stats["senior_title"] += 1
             continue
 
@@ -248,7 +259,9 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
 
         loc_ok = location_matches(job.location, cfg["preferred_locations"], cfg["remote_country"])
         # A job kept only for its skills must be in your cities: that wider net needs a tighter place.
-        if (cfg["location_mode"] == "require" or matched_by == "skills") and not loc_ok:
+        # "Keep jobs in other cities" means other cities of your country (remote_country), not abroad.
+        if ((cfg["location_mode"] == "require" or matched_by == "skills") and not loc_ok
+                or not in_country(job.location, cfg["remote_country"])):
             stats["location_dropped"] += 1
             continue
 
