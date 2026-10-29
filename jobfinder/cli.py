@@ -113,6 +113,8 @@ def print_summary(stats, failures, settings, rows=(), profiles=()) -> None:
     for failure in failures:
         print(f"  - {failure}")
     print(f"Jobs seen: {stats['jobs_seen']}")
+    if stats["duplicates_merged"]:
+        print(f"  the same opening posted more than once, shown once: {stats['duplicates_merged']}")
     print(f"  removed as stale (older than {settings['freshness_days']} days): {stats['stale_dropped']}")
     print(f"  skipped, already removed earlier: {stats['already_dropped']}")
     print(f"  not a strong enough match for your roles and skills: {stats['weak_match']}")
@@ -125,6 +127,9 @@ def print_summary(stats, failures, settings, rows=(), profiles=()) -> None:
     if len(profiles) > 1:
         print("  per track: " + ", ".join(f"{p['name']} {sum(r['Track'] == p['name'] for r in rows)}"
                                          for p in profiles))
+    for profile in profiles:
+        if not any(r["Track"] == profile["name"] for r in rows) and stats["jobs_seen"]:
+            print(f"  No strong matches for track '{profile['name']}' today; nothing weaker was added to fill it.")
 
 
 def print_preview(rows: List[dict], profiles=()) -> None:
@@ -336,12 +341,14 @@ def cmd_run(args) -> int:
 
     state = load_state(args.state)
     now = datetime.now(timezone.utc)
+    warnings: List[str] = []      # parts of a source that could not be read, said again at the end
 
     def fetch(platform: str, board: str, name: str):
         if platform == "alerts":
             return alert_jobs
         if platform in REMOTE_SOURCES:
-            return fetch_remote(platform, settings, now, http_get_json, time.sleep, args.cache, queries=queries)
+            return fetch_remote(platform, settings, now, http_get_json, time.sleep, args.cache, queries=queries,
+                                warn=warnings.append)
         return fetch_board(platform, board, name)
 
     print_profiles(profiles)
@@ -362,6 +369,10 @@ def cmd_run(args) -> int:
     out_path = Path(args.out_dir) / f"jobs-{now.date().isoformat()}.csv"
     write_csv(rows, str(out_path))
     print_summary(stats, failures, settings, rows, profiles)
+    if warnings:
+        print("\nSome jobs could not be read today, so this list may be missing some (run again later to retry):")
+        for warning in warnings:
+            print(f"  - {warning}")
     print(f"\nWrote {out_path}")
     return 0
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Callable, List
 
 from ..models import Job
-from ..textutil import parse_dt, strip_html
+from ..textutil import norm, parse_dt, strip_html
 
 
 def fetch(board: str, company: str, get_json: Callable[[str], Any]) -> List[Job]:
@@ -17,6 +17,9 @@ def fetch(board: str, company: str, get_json: Callable[[str], Any]) -> List[Job]
     jobs: List[Job] = []
     for item in (data or {}).get("jobs", []):
         location = (item.get("location") or {}).get("name", "") or ""
+        offices = [o.get("name", "") for o in item.get("offices") or [] if o.get("name")]
+        if norm(location) == "remote" and offices:
+            location = f"Remote ({', '.join(offices)})"   # 'Remote' alone hides that the job is for Poland only
         jobs.append(Job(
             platform="greenhouse",
             board=board,

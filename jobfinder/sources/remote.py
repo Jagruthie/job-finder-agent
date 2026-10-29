@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import quote
 
+from . import SourceError
 from ..filters import INDIA_PLACES
 from ..models import Job
 from ..textutil import norm, parse_dt, strip_html
@@ -24,15 +25,21 @@ from ..textutil import norm, parse_dt, strip_html
 SOURCES = ("himalayas", "remoteok")
 MAX_HIMALAYAS_PAGES = 60          # 20 jobs a page, newest first; stops earlier once jobs are too old
 MAX_SEARCH_PAGES = 10             # per role searched, same rule
+PAGE_TRIES = 3                    # a page that fails is tried again, waiting a little longer each time
 
 
-def _cached(cache_dir: Optional[str], name: str, now: datetime, download: Callable[[], Any]) -> Any:
+def _cached(cache_dir: Optional[str], name: str, now: datetime, download: Callable[[], Any],
+            complete: Callable[[], bool] = lambda: True) -> Any:
+    """Today's copy of a feed, downloading it if there is none. A download that stopped part way is used
+    but not saved, so the next run today tries the whole feed again."""
     if not cache_dir:
         return download()
     file = Path(cache_dir) / f"{name}-{now.date().isoformat()}.json"
     if file.exists():
         return json.loads(file.read_text(encoding="utf-8"))
     data = download()
+    if not complete():
+        return data
     file.parent.mkdir(parents=True, exist_ok=True)
     for old in file.parent.glob(f"{name}-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].json"):
         old.unlink()                              # earlier days of this same feed only, not other searches
@@ -49,21 +56,38 @@ def _pay(low, high, currency, period) -> str:
 
 def fetch_himalayas(get_json: Callable[[str], Any], country: str, max_age_days: int, now: datetime,
                     sleep: Callable[[float], None], cache_dir: Optional[str] = None,
-                    queries: List[str] = (), full: bool = True) -> List[Job]:
+                    queries: List[str] = (), full: bool = True,
+                    warn: Callable[[str], None] = lambda message: None) -> List[Job]:
     """Remote jobs open to your country: the whole recent feed (full), and a search for each of your roles
-    (queries), which also reaches matching jobs too far down the feed to be read in full."""
+    (queries), which also reaches matching jobs too far down the feed to be read in full.
+
+    One failed page does not lose the rest: it is tried again, and if it still fails, the pages read so far
+    are kept and `warn` says what is missing. Only when nothing at all could be read is SourceError raised."""
     where = f"country={quote(country)}&" if country else "worldwide=true&"
     place = norm(country).replace(" ", "-") or "worldwide"
 
-    def download(query: str = "", pages: int = MAX_HIMALAYAS_PAGES) -> Callable[[], list]:
+    def download(query: str, pages: int, stopped: list) -> Callable[[], list]:
         def run() -> list:
             items: list = []
             search = f"q={quote(query)}&" if query else ""
             for page in range(1, pages + 1):
                 if page > 1:
                     sleep(1.0)
-                batch = (get_json(f"https://himalayas.app/jobs/api/search?{search}{where}sort=recent&page={page}")
-                         or {}).get("jobs", [])
+                url = f"https://himalayas.app/jobs/api/search?{search}{where}sort=recent&page={page}"
+                batch = None
+                for attempt in range(1, PAGE_TRIES + 1):
+                    try:
+                        batch = (get_json(url) or {}).get("jobs", [])
+                        break
+                    except SourceError as error:
+                        if attempt == PAGE_TRIES:
+                            if not items:
+                                raise
+                            stopped.append(f"page {page}: {error}")
+                        else:
+                            sleep(3.0 * attempt)
+                if batch is None:
+                    break
                 items.extend(batch)
                 dates = [parse_dt(item.get("pubDate")) for item in batch]
                 if not batch or all(d and now - d > timedelta(days=max_age_days) for d in dates):
@@ -71,10 +95,22 @@ def fetch_himalayas(get_json: Callable[[str], Any], country: str, max_age_days: 
             return items
         return run
 
-    feeds = [_cached(cache_dir, f"himalayas-{place}", now, download())] if full else []
-    for query in queries:
-        slug = norm(query).replace(" ", "-")
-        feeds.append(_cached(cache_dir, f"himalayas-{place}-search-{slug}", now, download(query, MAX_SEARCH_PAGES)))
+    feeds, failed = [], []
+    searches = ([("", f"himalayas-{place}", MAX_HIMALAYAS_PAGES, "recent jobs")] if full else []) + [
+        (query, f"himalayas-{place}-search-{norm(query).replace(' ', '-')}", MAX_SEARCH_PAGES, f"search '{query}'")
+        for query in queries]
+    for query, name, pages, label in searches:
+        stopped: list = []
+        try:
+            feeds.append(_cached(cache_dir, name, now, download(query, pages, stopped), lambda: not stopped))
+        except SourceError as error:
+            failed.append(label)
+            warn(f"Himalayas {label} could not be read ({error}); its jobs are missing today")
+            continue
+        if stopped:
+            warn(f"Himalayas {label} stopped part way ({stopped[0]}); later pages are missing today")
+    if searches and len(failed) == len(searches):
+        raise SourceError("could not be read today; remote jobs from Himalayas are missing")
 
     jobs: Dict[str, Job] = {}
     for item in (item for feed in feeds for item in feed or []):
@@ -126,10 +162,12 @@ def fetch_remoteok(get_json: Callable[[str], Any], country: str, now: datetime,
 
 def fetch_remote(source: str, settings: dict, now: datetime, get_json: Callable[[str], Any],
                  sleep: Callable[[float], None], cache_dir: Optional[str] = "cache",
-                 queries: List[str] = (), full: bool = True) -> List[Job]:
+                 queries: List[str] = (), full: bool = True,
+                 warn: Callable[[str], None] = lambda message: None) -> List[Job]:
     country = settings.get("remote_country", "India")
     if source == "himalayas":
-        return fetch_himalayas(get_json, country, settings["freshness_days"], now, sleep, cache_dir, queries, full)
+        return fetch_himalayas(get_json, country, settings["freshness_days"], now, sleep, cache_dir, queries, full,
+                               warn)
     if source == "remoteok":
         return fetch_remoteok(get_json, country, now, cache_dir)
     raise ValueError(f"unknown remote source '{source}'")

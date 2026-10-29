@@ -5,9 +5,24 @@ from typing import List, Optional, Tuple
 
 from .textutil import has_phrase, norm
 
-# "0-1 years", "1 to 3 yrs", "5+ years"
+# "0-1 years", "1 to 3 yrs", "5+ years", "3-4 or more years", "four years"
+_NUMBER_WORDS = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+                 "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "fifteen": 15}
+_NUM = r"(?:\d{1,2}|" + "|".join(_NUMBER_WORDS) + r")"
 _YEARS = re.compile(
-    r"(\d{1,2})\s*(?:\+|plus)?\s*(?:(?:-|–|—|to)\s*(\d{1,2})\s*\+?)?\s*(?:years?|yrs?)\b", re.I)
+    rf"(?<![\w.])({_NUM})\s*(?:\+|plus)?\s*(?:(?:-|–|—|to)\s*({_NUM})\s*\+?)?\s*(?:or (?:more|above))?\s*"
+    r"(?:years?|yrs?)\b", re.I)
+# "over multiple years": at least two, but only when 'experience' is nearby.
+_VAGUE_YEARS = re.compile(r"\b(?:multiple|several)\s+years\b", re.I)
+# Words right after the years that say what the years were spent on: "3-5 years in support", "2 to 4 years designing".
+_YEARS_OF_WORK = re.compile(
+    r"\s*(?:\(|of\b|in\b|as\b|at\b|with\b|on\b|working|designing|building|managing|leading|selling|supporting|"
+    r"running|owning|doing|hands|post|relevant|professional|industry|prior|proven|full|track|direct|corporate|"
+    r"previous|practical)", re.I)
+# ...unless they are the company's own story: "11 years old", "over 50 years of innovation".
+_COMPANY_YEARS = re.compile(r"\s*(?:old\b|ago\b|of (?:history|innovation|heritage|excellence|trust|operations?\b"
+                            r"|service|serving|success|growth|business\b))", re.I)
+
 _FRESHER = re.compile(
     r"\b(freshers?|entry[- ]level|new grads?|recent graduates?|no (?:prior )?experience (?:is )?(?:required|needed))\b", re.I)
 _PAY = re.compile(
@@ -19,23 +34,44 @@ _PAY = re.compile(
 _SHIFT = re.compile(r"\b10(?::00)?\s?(?:am|a\.m\.)?\s?(?:-|–|to)\s?6(?::00)?\s?(?:pm|p\.m\.)?", re.I)
 
 WITHIN, TOO_SENIOR, NOT_STATED = "within", "too_senior", "not_stated"
+_CLAUSE_END = re.compile(r"[.;•\n]\s")
+
+
+def _years_value(word: str) -> int:
+    return int(word) if word.isdigit() else _NUMBER_WORDS[word.lower()]
+
+
+def _clause(text: str, start: int, end: int) -> str:
+    """Up to 60 characters around a match, cut at the sentence or bullet it sits in."""
+    before = _CLAUSE_END.split(text[max(0, start - 60): start])[-1]
+    after = _CLAUSE_END.split(text[end: end + 60])[0]
+    return f"{before}{text[start:end]}{after}".lower()
 
 
 def experience_requirement(text: str) -> Tuple[Optional[int], str]:
     """Return (minimum years the job asks for, the matching text). (None, "") if not stated.
 
-    Takes the strictest minimum found. A number above 1 only counts when the word
-    'experience' is nearby, so lines like 'founded 10 years ago' are ignored.
+    Takes the strictest minimum found. A number above 1 counts when the word 'experience' is nearby,
+    or when the words after it say what the years were spent on ('6-8 years in ads strategy'), so
+    lines like 'founded 10 years ago' or '11 years old' are ignored.
     """
+    text = text or ""
     best: Optional[int] = None
     snippet = ""
-    for match in _YEARS.finditer(text or ""):
-        low = int(match.group(1))
-        context = text[max(0, match.start() - 60): match.end() + 60].lower()
-        if low > 1 and "experience" not in context and " exp" not in context:
+    for match in _YEARS.finditer(text):
+        low = _years_value(match.group(1))
+        after = text[match.end(): match.end() + 40]
+        context = _clause(text, match.start(), match.end())
+        if _COMPANY_YEARS.match(after):
+            continue
+        if low > 1 and "experience" not in context and " exp" not in context and not _YEARS_OF_WORK.match(after):
             continue
         if best is None or low > best:
             best, snippet = low, match.group(0).strip()
+    for match in _VAGUE_YEARS.finditer(text):
+        context = _clause(text, match.start(), match.end())
+        if "experience" in context and (best is None or best < 2):
+            best, snippet = 2, match.group(0).strip()
     if best is not None:
         return best, snippet
     if _FRESHER.search(text or ""):
@@ -82,6 +118,13 @@ def has_excluded_word(job_title: str, words: List[str], role_phrases: List[str] 
     return any(has_phrase(title_norm.strip(), norm(word)) for word in words)
 
 
+# Titles that are senior by what the job is, even with no 'Senior' in them and no years stated: people managers
+# and quota-carrying sales. Used below 3 years of experience, like 'senior'; a role you asked for still counts.
+SENIOR_ROLE_PHRASES = ["engineering manager", "team manager", "people manager", "general manager", "country manager",
+                       "regional manager", "account executive", "strategic account", "enterprise account",
+                       "account director"]
+
+
 INDIA_PLACES = ["india", "bengaluru", "bangalore", "hyderabad", "mumbai", "delhi", "gurgaon", "gurugram", "noida",
                 "pune", "chennai", "kolkata", "ahmedabad", "telangana", "karnataka", "maharashtra",
                 "mohali", "chandigarh", "jaipur", "kochi", "coimbatore", "thiruvananthapuram", "trivandrum", "indore",
@@ -99,6 +142,49 @@ def remote_in(location_norm: str, country: str) -> bool:
     if any(has_phrase(location_norm, place) for place in places):
         return True
     return set(location_norm.split()) <= _ANYWHERE
+
+
+# A job that only says 'Remote' often limits who can apply in its text or title instead.
+_ELSEWHERE = (r"(?:US|U\.S\.|USA|United States|North America|(?:the )?Americas|Europe|EU|EMEA|UK|United Kingdom|"
+              r"Canada|LATAM|Latin America|Australia|Brazil|Mexico)")
+_RESTRICTED = [re.compile(pattern, re.I if case else 0) for pattern, case in [
+    (rf"\b{_ELSEWHERE}\b[^.;\n]{{0,30}}\btime ?zones?\b", False),
+    (r"\b(?:EST|PST|CST|MST|CET|EET)\b[^.;\n]{0,20}\b(?:hours|time ?zones?|working)\b", False),
+    (r"\b(?:US |U\.S\. )?(?:Eastern|Pacific|Central|Mountain) (?:Standard )?(?:time ?zones?|time\b)", True),
+    (rf"\b(?:based|located|reside|residing|live|living)\b[^.;\n]{{0,25}}\b(?:in|within|on)\b[^.;\n]{{0,25}}"
+     rf"\b{_ELSEWHERE}\b", False),
+    (rf"\banywhere in (?:the )?{_ELSEWHERE}\b", False),
+    (rf"\b(?:authori[sz]ed|eligible|right) to work in (?:the )?{_ELSEWHERE}\b", False),
+]]
+_OPEN_HERE = {"india": re.compile(r"\b(?:India|IST|APAC|Asia|anywhere in the world|work from anywhere)\b", re.I)}
+_COUNTRIES = ["united states", "usa", "canada", "mexico", "brazil", "argentina", "united kingdom", "uk", "ireland",
+              "france", "germany", "spain", "italy", "netherlands", "poland", "portugal", "sweden", "denmark",
+              "norway", "finland", "switzerland", "austria", "belgium", "czech republic", "romania", "israel",
+              "australia", "new zealand", "japan", "singapore", "philippines", "indonesia", "vietnam", "korea",
+              "uae", "saudi arabia", "south africa", "nigeria", "kenya", "egypt", "emea", "latam", "europe",
+              "north america", "americas", "dach", "nordics", "benelux"]
+
+
+def remote_elsewhere(title: str, description: str, country: str = "India") -> str:
+    """For a job whose location is only 'Remote': the line that limits it to somewhere else, such as
+    'US Eastern timezones is required' or a title ending in ', Poland'. Empty if nothing says so, or if
+    your country (or IST, APAC, Asia) is named too."""
+    if not country:
+        return ""
+    title_norm = norm(title)
+    own = INDIA_PLACES if norm(country) == "india" else [norm(country)]
+    if not any(has_phrase(title_norm, place) for place in own):
+        for place in _COUNTRIES:
+            if has_phrase(title_norm, place):
+                return f"title names {place.title() if len(place) > 4 else place.upper()}"
+    open_here = _OPEN_HERE.get(norm(country), re.compile(rf"\b{re.escape(country)}\b", re.I))
+    if open_here.search(description or ""):
+        return ""
+    for pattern in _RESTRICTED:
+        found = pattern.search(description or "")
+        if found:
+            return found.group(0).strip()
+    return ""
 
 
 def in_country(location: str, country: str = "India") -> bool:
