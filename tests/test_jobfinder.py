@@ -128,6 +128,35 @@ class FilterTests(unittest.TestCase):
         for text, expected in cases:
             self.assertEqual(filters.experience_requirement(text)[0], expected, text)
 
+    def test_experience_written_without_the_word_experience(self):
+        # Lines from real postings that were read as "not stated" before.
+        cases = [
+            ("- 3-5 years in a support capacity focusing on escalated issues", 3),
+            ("What you bring in: 6–8 years in ads strategy, monetization, pricing", 6),
+            ("8+ years in support leadership, Escalation management", 8),
+            ("More than four years of experience in IT Operations", 4),
+            ("2–4 years of corporate real estate transaction or portfolio coordination", 2),
+            ("Roughly 2 to 4 years designing consumer products, with shipped work", 2),
+            ("3-4 or more years of people management in a high-stakes setting", 3),
+            ("Experience closing sales, over multiple years, for a software or SaaS business", 2),
+            ("• 2–5 years in DevOps, SRE, infrastructure or backend engineering", 2),
+        ]
+        for text, expected in cases:
+            self.assertEqual(filters.experience_requirement(text)[0], expected, text)
+
+    def test_company_history_years_are_not_requirements(self):
+        cases = [
+            "payments to everyone above 11 years old. Our flagship account",
+            "an industry that has not seen any innovation in over 50 years, Tekion has challenged",
+            "Trusted for over 20 years of innovation by banks",
+            "For many years we have built tools",
+        ]
+        for text in cases:
+            self.assertIsNone(filters.experience_requirement(text)[0], text)
+        # A real requirement later in the same post still counts.
+        self.assertEqual(filters.experience_requirement(
+            "innovation in over 50 years, Tekion leads. • 0–2 years of experience in software testing")[0], 0)
+
     def test_buckets(self):
         self.assertEqual(filters.experience_bucket("0-1 years", 1)[0], filters.WITHIN)
         self.assertEqual(filters.experience_bucket("2+ years of experience", 1)[0], filters.TOO_SENIOR)
@@ -737,6 +766,22 @@ class SeniorWordTests(unittest.TestCase):
         self.assertTrue(filters.has_excluded_word("Staff Software Engineer", words, roles))
         self.assertTrue(filters.has_excluded_word("Chief of Staff", words))          # no role given: old behaviour
 
+    def test_people_manager_and_quota_sales_titles_are_senior_below_three_years(self):
+        jobs = [Job("demo", "x", "Acme", str(i), title, "Hyderabad", f"https://e/{i}",
+                    "Product management, agile, user research, metrics and strategy.", NOW)
+                for i, title in enumerate(["Engineering Manager, Integrations", "Customer Service - Team Manager",
+                                           "Strategic Account Executive", "Associate Product Manager"])]
+
+        def run(years, profile=PM):
+            rows, stats, _ = run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], [profile],
+                                          {"preferred_locations": ["Hyderabad"], "max_experience_years": years},
+                                          VOCAB, {"first_seen": {}, "dropped": {}}, lambda p, b, n: jobs, now=NOW)
+            return sorted(r["Role"] for r in rows), stats["senior_title"]
+        self.assertEqual(run(1), (["Associate Product Manager"], 3))
+        self.assertIn("Engineering Manager, Integrations",
+                      run(1, {**PM, "titles": PM["titles"] + ["Engineering Manager"]})[0])
+        self.assertEqual(run(5)[1], 0)              # with 5 years these titles are within reach
+
 
 class RemoteLocationTests(unittest.TestCase):
     def test_remote_means_remote_in_your_country(self):
@@ -746,6 +791,44 @@ class RemoteLocationTests(unittest.TestCase):
                                    ("Hyderabad", True), ("Pune", False)]:
             self.assertEqual(filters.location_matches(location, wanted), expected, location)
         self.assertTrue(filters.location_matches("Remote, United States", wanted, remote_country=""))
+
+    def test_plain_remote_limited_elsewhere_by_its_text_or_title(self):
+        limited = [
+            ("GTM Enablement", "This role is remote-first, ideally based on the East Coast of the US. The ability to "
+                               "operate in US Eastern (GMT-5, GMT-4) timezones is required."),
+            ("Partner Program", "It can be executed from anywhere in North America, with the ability to operate in "
+                                "Americas timezones required."),
+            ("Strategic Account Executive, Poland", "Own large accounts."),
+            ("Support Specialist", "Candidates must be located in the United States."),
+            ("Recruiter", "You must be authorized to work in the UK."),
+        ]
+        for title, text in limited:
+            self.assertTrue(filters.remote_elsewhere(title, text), title)
+        open_here = [
+            ("Content Writer", "We are a global team and prioritize your talent, not your location."),
+            ("SEO Specialist", "Overlap with US Eastern time zones for two hours; open to candidates in India."),
+            ("Product Analyst", "Work with our customers across Europe and the US."),
+        ]
+        for title, text in open_here:
+            self.assertEqual(filters.remote_elsewhere(title, text), "", title)
+
+    def test_plain_remote_job_for_another_country_is_dropped(self):
+        jobs = [Job("demo", "x", "Acme", "1", "SEO Specialist", "Remote", "https://e/1",
+                    "SEO, keyword research. You will work in Americas timezones.", NOW),
+                Job("demo", "x", "Acme", "2", "SEO Specialist", "Remote", "https://e/2", "SEO, keyword research.", NOW)]
+        rows, stats, _ = run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], [SEO],
+                                      {"preferred_locations": ["Remote"]}, VOCAB, {"first_seen": {}, "dropped": {}},
+                                      lambda p, b, n: jobs, now=NOW)
+        self.assertEqual([r["Apply link"][-1] for r in rows], ["2"])
+        self.assertEqual(stats["location_dropped"], 1)
+
+    def test_greenhouse_names_the_office_of_a_plain_remote_job(self):
+        payload = {"jobs": [{"id": 9, "title": "Account Executive", "updated_at": iso(1), "location": {"name": "Remote"},
+                             "offices": [{"name": "Poland"}], "absolute_url": "https://e/9", "content": ""}]}
+        from jobfinder.sources import greenhouse
+        job = greenhouse.fetch("acme", "Acme", lambda url: payload)[0]
+        self.assertEqual(job.location, "Remote (Poland)")
+        self.assertFalse(filters.in_country(job.location, "India"))
 
 
 class EntryLevelTests(unittest.TestCase):
@@ -919,7 +1002,8 @@ class SkillsFirstTests(unittest.TestCase):
     def test_boilerplate_and_company_name_skills_do_not_count(self):
         profile = {"name": "pm", "skills": ["Communication", "Documentation", "Presentation", "Git/GitHub", "SQL"],
                    "titles": []}
-        filler = [self.job(f"f{i}", "Driver", "Communication, documentation and presentation.") for i in range(25)]
+        filler = [self.job(f"f{i}", "Driver", f"Communication, documentation and presentation. Route {i}.")
+                  for i in range(25)]
         jobs = filler + [self.job("1", "Insights Associate", "Communication, documentation, presentation, SQL, git.",
                                   company="gitlab")]
         rows, _, _ = self.run_jobs(jobs, [profile])
@@ -984,6 +1068,35 @@ class RemoteSourceTests(unittest.TestCase):
             self.assertEqual(len(self.urls), calls)
             self.assertEqual(len(again), 2)
 
+    def test_one_failed_page_keeps_the_rest_and_warns(self):
+        from jobfinder.sources.remote import fetch_himalayas
+        stamp = int((NOW - timedelta(days=1)).timestamp())
+
+        def flaky(url):
+            self.urls.append(url)
+            if "page=1" in url:
+                return {"jobs": [{"guid": "g1", "title": "SEO Specialist", "companyName": "A", "pubDate": stamp,
+                                  "applicationLink": "https://himalayas.app/a"}]}
+            if "page=2" in url:
+                raise SourceError("HTTP 429")
+            return {"jobs": []}
+        with tempfile.TemporaryDirectory() as tmp:
+            warned = []
+            jobs = fetch_himalayas(flaky, "India", 7, NOW, lambda s: None, cache_dir=tmp, queries=["SEO Executive"],
+                                   warn=warned.append)
+            self.assertEqual([j.title for j in jobs], ["SEO Specialist"])
+            self.assertEqual(sum("page=2" in u and "q=" not in u for u in self.urls), 3)   # tried three times
+            self.assertEqual(len(warned), 2)                    # the recent feed and the search both stopped
+            self.assertEqual(os.listdir(tmp), [])               # part of a feed is not saved, so a later run retries
+
+    def test_himalayas_that_cannot_be_read_at_all_fails_clearly(self):
+        from jobfinder.sources.remote import fetch_himalayas
+
+        def down(url):
+            raise SourceError("HTTP 503")
+        with self.assertRaises(SourceError):
+            fetch_himalayas(down, "India", 7, NOW, lambda s: None, queries=["SEO Executive"])
+
     def test_remoteok_keeps_only_jobs_clearly_open_to_your_country(self):
         from jobfinder.sources.remote import fetch_remoteok
         feed = [{"legal": "API terms"},
@@ -1040,6 +1153,34 @@ class PriorityAndDealBreakerTests(unittest.TestCase):
         return run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], profiles, {"preferred_locations": ["Hyderabad"]},
                             VOCAB, {"first_seen": {}, "dropped": {}}, lambda p, b, n: jobs, now=NOW)
 
+    def test_skills_only_match_must_name_a_priority_skill(self):
+        # The SEO track on a day with no SEO jobs: general skills alone no longer fill the list.
+        seo = {"name": "seo", "skills": ["SEO", "Keyword Research", "Cold Outreach", "Research", "Writing", "Strategy",
+                                         "Documentation"],
+               "titles": ["SEO Executive"], "priority_skills": ["SEO", "Keyword Research"]}
+        filler = [self.job(f"f{i}", "Warehouse Driver", f"Drive the van on route {i}.") for i in range(25)]
+        rows, _, _ = self.run_jobs(filler + [
+            self.job("1", "Account Development Representative",
+                     "Cold outreach, research, writing, strategy and documentation for sales."),
+            self.job("2", "Organic Growth Associate",
+                     "SEO and keyword research, writing briefs, research and documentation."),
+        ], [seo])
+        self.assertEqual([r["Apply link"][-1] for r in rows], ["2"])
+
+    def test_setup_suggests_priority_skills_from_the_roles(self):
+        self.assertEqual(VOCAB.role_skills(["SEO Executive"])[:2], ["SEO", "Keyword Research"])
+        self.assertIn("SEO", VOCAB.role_skills(["seo specialist", "Content Writer"])[:1])
+        self.assertEqual(VOCAB.role_skills(["Underwater Welder"]), [])
+
+    def test_the_same_opening_posted_many_times_is_one_row(self):
+        text = "0-1 years. Product management, roadmap and user research."
+        jobs = [self.job(str(i), "Associate Product Manager", text) for i in range(10)]
+        jobs.append(self.job("other", "Associate Product Manager", text + " For the payments team."))
+        rows, stats, _ = self.run_jobs(jobs, [self.PM])
+        self.assertEqual(sorted(r["Role"] for r in rows),
+                         ["Associate Product Manager", "Associate Product Manager (10 openings)"])
+        self.assertEqual(stats["duplicates_merged"], 9)
+
     def test_coding_terms_are_found_exactly(self):
         terms = VOCAB.deal_breaker_terms("Coding", "Python, SQL and C# on .NET; the rest is planning in Notion.")
         self.assertEqual(terms, [".NET", "C#", "python", "sql"])
@@ -1088,6 +1229,25 @@ class PriorityAndDealBreakerTests(unittest.TestCase):
             self.assertEqual(saved["deal_breakers"], ["Coding"])
             self.assertEqual(saved["priority_skills"], ["Product Management", "SQL"])
             self.assertTrue(any("Please type one of: Coding" in line for line in said))
+
+    def test_setup_offers_coding_and_role_skills_to_a_track_never_asked_before(self):
+        # Like a profile saved before deal-breakers and priorities existed: pressing Enter now sets them.
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = os.path.join(tmp, "profiles")
+            os.makedirs(folder)
+            for name, titles in (("seo", ["SEO Executive"]), ("de", ["Data Engineer"])):
+                with open(os.path.join(folder, f"{name}.json"), "w") as handle:
+                    json.dump({"name": name, "skills": ["SEO", "Ahrefs", "Writing", "SQL", "Python"],
+                               "titles": titles}, handle)
+            run_setup(os.path.join(tmp, "settings.json"), folder, VOCAB, say=lambda line: None,
+                      ask=answer_by_prompt([("Pay [", "none")]))
+            with open(os.path.join(folder, "seo.json")) as handle:
+                seo = json.load(handle)
+            with open(os.path.join(folder, "de.json")) as handle:
+                de = json.load(handle)
+            self.assertEqual(seo["deal_breakers"], ["Coding"])
+            self.assertEqual(seo["priority_skills"], ["SEO", "Ahrefs"])
+            self.assertEqual(de["deal_breakers"], [])          # a coding role is never offered Coding as a deal-breaker
 
 
 
@@ -1262,8 +1422,10 @@ class SimilarityMatchTests(unittest.TestCase):
         return Job("demo", "x", "Acme", job_id, title, location, f"https://e/{job_id}", text, NOW)
 
     def filler(self, count=25):
-        """Ordinary jobs, so the run has enough jobs to tell common words from rare ones."""
-        return [self.job(f"f{i}", "Driver", "Good communication and a valid licence. We are hiring.") for i in range(count)]
+        """Ordinary jobs, so the run has enough jobs to tell common words from rare ones. Each names its own
+        route, or they would be one opening posted many times."""
+        return [self.job(f"f{i}", "Driver", f"Good communication and a valid licence. We are hiring. Route {i}.")
+                for i in range(count)]
 
     def run_jobs(self, jobs, profiles, **settings):
         return run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], profiles,

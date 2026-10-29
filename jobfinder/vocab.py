@@ -184,6 +184,18 @@ class Vocab:
         title_norm = norm(title)
         return any(has_phrase(title_norm, norm(word)) for word in self.deal_breakers.get(group, {}).get("title_words", []))
 
+    def role_skills(self, roles: List[str]) -> List[str]:
+        """Skills the built-in list gives for these roles (by name or other spelling), the ones most of the
+        roles share first. 'SEO Executive' gives SEO, Keyword Research, Ahrefs and so on."""
+        counts: Dict[str, int] = {}
+        for role in roles:
+            key = norm(role)
+            for title, info in self.titles.items():
+                if key in self.title_phrases(title):
+                    for skill in info.get("skills", []):
+                        counts[skill] = counts.get(skill, 0) + 1
+        return sorted(counts, key=lambda skill: -counts[skill])
+
     def title_phrases(self, title: str) -> List[str]:
         """Normalized spellings that count as this title (the title itself plus known aliases)."""
         phrases = {norm(title)}

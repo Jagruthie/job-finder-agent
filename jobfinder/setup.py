@@ -168,10 +168,18 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
             ask, say, "Roles", roles, hint if roles else "Enter leaves them empty", "Data Engineer, Recruiter",
             required=not new_skills))
         saved_breakers, saved_priority = profile.get("deal_breakers", []), profile.get("priority_skills", [])
-        new_breakers = _ask_deal_breakers(ask, say, vocab, clean_list(saved_breakers))
+        suggested_breakers = clean_list(saved_breakers)
+        if "deal_breakers" not in profile and "Coding" in vocab.deal_breakers and new_titles and not any(
+                vocab.deal_breaker_title("Coding", title) for title in new_titles):
+            suggested_breakers = ["Coding"]    # never asked before, and none of the roles is a coding job
+        new_breakers = _ask_deal_breakers(ask, say, vocab, suggested_breakers)
         avoided = {s for group in new_breakers for s in vocab.deal_breakers[group].get("skills", [])}
         priority_default = [s for s in clean_list(saved_priority) if s not in avoided]
-        say("  Priority skills (optional): what this track's jobs should mainly be about. They count more in the match.")
+        if "priority_skills" not in profile:
+            # Never asked before: suggest your skills that your roles are about (SEO, Ahrefs for an SEO role).
+            priority_default = [s for s in vocab.role_skills(new_titles) if s in new_skills and s not in avoided]
+        say("  Priority skills (optional): what this track's jobs should mainly be about. They count more in the "
+            "match, and a job that matches by skills alone must name at least one of them.")
         new_priority = _ask_profile_list(ask, say, "Priority skills", priority_default, "Enter accepts these",
                                          "Airflow, Data Modeling", required=False)
         added = [s for s in new_priority if s not in new_skills]

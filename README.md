@@ -12,7 +12,7 @@ It reads public job lists (company boards on Greenhouse, Lever and Ashby, and th
 
 1. **Setup** asks a few questions (cities, experience, freshness, pay) and reads your resume on your computer.
 2. **You confirm the skills and roles** found in your resume, and edit them in your own words. They are saved.
-3. For each track you can also set **priority skills** (they count more) and **deal-breakers** (work it must not depend on; built in: Coding).
+3. For each track you can also set **priority skills** (they count more, and setup suggests them from your roles) and **deal-breakers** (work it must not depend on; built in: Coding, suggested for tracks whose roles are not coding jobs).
 4. **Every run** collects today's jobs, removes the ones that fail your rules (age, years, place, pay), and **ranks the rest by how well they fit your saved roles and skills**, the way a search engine ranks pages. The strong matches are kept, each with its reasons.
 5. You open the CSV, read the reasons, and apply yourself.
 
@@ -125,7 +125,7 @@ Good to know:
 
 ## Which jobs are kept
 
-**First, the rules.** A job is removed when it is older than your `freshness_days`, too senior, abroad (jobs in other cities of your country, `remote_country`, default India, are kept unless you chose to remove them; remote jobs count when they are open to your country), outside your pay range when you chose to remove those, or against a deal-breaker.
+**First, the rules.** A job is removed when it is older than your `freshness_days`, too senior, abroad (jobs in other cities of your country, `remote_country`, default India, are kept unless you chose to remove them; remote jobs count when they are open to your country; a job that only says "Remote" is removed when its title names another country or its text limits it elsewhere, such as "US Eastern time zones required"), outside your pay range when you chose to remove those, or against a deal-breaker.
 
 **Then, how well it fits.** Every remaining job is scored against what you saved from your resume:
 
@@ -134,9 +134,11 @@ Good to know:
 - **Rare words count more.** A word that few of today's jobs use ("Airflow", "HRBP") counts for a lot; one that most of them use ("communication", equal-opportunity text) counts for almost nothing. This is learned from each day's jobs, so it works for any field with no list to keep up to date. Other spellings from `data/skills.json` count too (PySpark for Spark, HRBP for HR Business Partner).
 - **Priority skills count 1.5 times; roles count twice.**
 
-A job is kept when **its title names one of your roles**, or when it **scores at least 45% of today's best match** for the track **and names at least 3 of your skills** (not counting skills found in most of today's jobs).
+A job is kept when **its title names one of your roles**, or when it **scores at least 45% of today's best match** for the track **and names at least 3 of your skills** (not counting skills found in most of today's jobs). If the track has priority skills, a job kept on skills alone must name at least one of them, so a day with no real matches for a track keeps none rather than the least bad jobs.
 
-**Too senior** means a title with a word such as senior, lead, head, director, principal or staff (words inside your own role name, as in "Chief of Staff", do not count), a level mark above your years (II or L2 needs 2 years, III or L3 needs 5), or a posting asking for more years than you set. If you allow 3 or more years, Senior and Sr. titles are kept and judged by the years the posting asks for.
+**The same opening posted many times** (same company, title, place and text) is shown once, as "(10 openings)".
+
+**Too senior** means a title with a word such as senior, lead, head, director, principal or staff (words inside your own role name, as in "Chief of Staff", do not count), a level mark above your years (II or L2 needs 2 years, III or L3 needs 5), a title that is senior by its nature (Engineering Manager, Team Manager, Account Executive and the like, below 3 years), or a posting asking for more years than you set. Years are read however they are written: "3-5 years in support", "four years", "3-4 or more years", "over multiple years of experience". If you allow 3 or more years, Senior and Sr. titles are kept and judged by the years the posting asks for.
 
 **Stale jobs are remembered** with their date, so they never come back as new. If you later allow older jobs (more `freshness_days`), they are checked again.
 

@@ -7,12 +7,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Tuple
 
-from .filters import (NOT_STATED, TOO_SENIOR, WITHIN, entry_level_title, experience_bucket, has_excluded_word,
-                      higher_level_title, in_country, location_matches, parse_annual_pay, pay_from_text, shift_mentioned)
+from .filters import (INDIA_PLACES, NOT_STATED, TOO_SENIOR, WITHIN, entry_level_title, experience_bucket,
+                      has_excluded_word, higher_level_title, in_country, location_matches, parse_annual_pay,
+                      pay_from_text, remote_elsewhere, remote_in, SENIOR_ROLE_PHRASES, shift_mentioned)
 from .match import Corpus, JobTerms, Query, score
 from .models import Job
 from .sources import SourceError
-from .textutil import norm, parse_dt
+from .textutil import has_phrase, norm, parse_dt
 from .vocab import Vocab
 
 DEFAULT_SETTINGS = {
@@ -158,6 +159,8 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
 
     # Pass 1: read every company and keep the fresh jobs.
     fresh = []
+    first_of: Dict[tuple, str] = {}
+    openings: Counter = Counter()
     for index, company in enumerate(companies):
         if index:
             sleep(cfg["request_delay_seconds"])
@@ -189,6 +192,14 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
                 stats["already_dropped" if remembered is not None else "stale_dropped"] += 1
                 continue
             dropped.pop(job.key, None)
+            # The same opening posted several times (same company, title, place and text) is one row.
+            same = (norm(job.company), norm(job.title), norm(job.location), norm(job.description))
+            if same in first_of:
+                openings[first_of[same]] += 1
+                stats["duplicates_merged"] += 1
+                continue
+            first_of[same] = job.key
+            openings[job.key] = 1
             fresh.append((company, job, posted, basis, JobTerms(job.title, job.description)))
 
     # How rare each word is is learned from all of today's fresh jobs, so boilerplate weighs almost nothing.
@@ -199,6 +210,8 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
     # With 3 or more years, a "Senior" title is often within reach; the years the post asks for decide.
     excluded = [word for word in cfg["exclude_title_words"]
                 if not (cfg["max_experience_years"] >= 3 and norm(word) in ("senior", "sr"))]
+    if cfg["max_experience_years"] < 3:
+        excluded += SENIOR_ROLE_PHRASES
     scored = []
     for company, job, posted, basis, terms in fresh:
         text = f"{job.title}. {job.description}"
@@ -214,6 +227,11 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
         # "Keep jobs in other cities" means other cities of your country (remote_country), not abroad.
         if cfg["location_mode"] == "require" and not loc_ok or not in_country(job.location, cfg["remote_country"]):
             stats["location_dropped"] += 1
+            continue
+        if (has_phrase(norm(job.location), "remote") and remote_in(norm(job.location), cfg["remote_country"])
+                and not any(has_phrase(norm(job.location), place) for place in INDIA_PLACES)
+                and remote_elsewhere(job.title, job.description, cfg["remote_country"])):
+            stats["location_dropped"] += 1     # 'Remote', but the post says US time zones or the title says Poland
             continue
         pay_text, pay_label, pay_tier = pay_check(job, cfg)
         if cfg["pay_mode"] == "require" and pay_tier == 2:
@@ -235,13 +253,16 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
                        fits, breakers))
 
     # A strong match: its title names one of your roles, or it scores close to today's best match for the track
-    # and names enough of your skills.
+    # and names enough of your skills. When the track has priority skills, a match by skills alone must name at
+    # least one of them: a day with no real SEO jobs then keeps none, instead of the least bad of the rest.
     best = {p["name"]: max((s[11][p["name"]][0] for s in scored if p["name"] in s[11]), default=0.0) for p in prepared}
+    core = {p["name"]: set(p["_priority"]) for p in prepared}
 
     def strong(name, fit):
         value, titles_named, skills_named = fit
         return value > 0 and (bool(titles_named) or (
-            value >= cfg["match_share"] / 100 * best[name] and len(skills_named) >= cfg["match_min_skills"]))
+            value >= cfg["match_share"] / 100 * best[name] and len(skills_named) >= cfg["match_min_skills"]
+            and (not core[name] or bool(core[name] & set(skills_named)))))
 
     rows: List[dict] = []
     for company, job, posted, basis, text, bucket, exp_text, loc_ok, pay_text, pay_label, pay_tier, fits, breakers \
@@ -261,7 +282,7 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
         rows.append({
             "Track": track,
             "Company": job.company,
-            "Role": job.title,
+            "Role": job.title + (f" ({openings[job.key]} openings)" if openings[job.key] > 1 else ""),
             "Matched by": f"your role: {', '.join(titles_named)}" if titles_named else "your skills",
             "Apply link": job.url,
             "Posted": posted.date().isoformat(),
