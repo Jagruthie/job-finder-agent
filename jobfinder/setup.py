@@ -5,15 +5,17 @@ Press Enter to keep the value shown in [brackets]. Type 'none' to clear an optio
 """
 from __future__ import annotations
 
+import difflib
 import json
 import re
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from .filters import parse_pay_preference
+from .filters import INDIA_PLACES, parse_pay_preference
 from .pipeline import (DEFAULT_SETTINGS, clean_list, clean_locations, clean_text, is_backup, is_non_answer,
                        profile_files)
 from .resume import read_resume_text
+from .textutil import has_phrase, norm
 from .vocab import Vocab
 
 Ask = Callable[[str], str]
@@ -44,6 +46,21 @@ def describe_pay(currency: str, low: Optional[float], high: Optional[float]) -> 
 def _ask_list(ask: Ask, step: int, label: str, current: List[str]) -> List[str]:
     answer = ask(f"{step}/{TOTAL_STEPS}  {label} [{', '.join(current)}]: ").strip()
     return _split(answer) if answer else list(current)
+
+
+def _ask_country(ask: Ask, cities: List[str], current: str) -> str:
+    """The country you are job hunting in. Asked only when your cities are not in India (or you set another
+    country before), so for most people nothing changes. A city typed with a small slip ('Banglore') still
+    counts as Indian."""
+    places = [norm(city) for city in cities if norm(city) != "remote"]
+
+    def indian(place: str) -> bool:
+        return (any(has_phrase(place, known) for known in INDIA_PLACES)
+                or bool(difflib.get_close_matches(place, INDIA_PLACES, n=1, cutoff=0.8)))
+    if norm(current) == "india" and (not places or any(indian(place) for place in places)):
+        return current
+    answer = ask(f"      Which country are these cities in? Remote jobs must be open to it [{current or 'India'}]: ")
+    return answer.strip() or current or "India"
 
 
 def _ask_mode(ask: Ask, say: Say, step: int, label: str, current: str) -> str:
@@ -111,8 +128,9 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
     settings = dict(current)
     settings["preferred_locations"] = _ask_list(
         ask, 1, "Cities you prefer, comma separated", current["preferred_locations"])
+    settings["remote_country"] = _ask_country(ask, settings["preferred_locations"], current["remote_country"])
     settings["location_mode"] = _ask_mode(
-        ask, say, 2, f"Jobs in other cities{' of ' + current['remote_country'] if current['remote_country'] else ''}: "
+        ask, say, 2, f"Jobs in other cities{' of ' + settings['remote_country'] if settings['remote_country'] else ''}: "
         "keep them (ranked lower) or remove them?", current["location_mode"])
     settings["max_experience_years"] = _ask_int(
         ask, say, 3, "Most years of experience a job may ask for", current["max_experience_years"])
@@ -233,7 +251,12 @@ def _ask_resumes(ask: Ask, say: Say, profiles_dir: Path, vocab: Vocab, read_resu
         file = profiles_dir / f"{name}.json"
         if file.exists():
             say(f"  Profile '{name}' already exists. You will confirm the skills from this resume before it changes.")
-        found[file] = (skills, vocab.resume_titles(text))
+        roles = vocab.resume_titles(text)
+        suggested = vocab.suggest_roles(roles, skills)
+        added = [role for role in suggested if role not in roles]
+        if added:
+            say(f"  Also suggesting roles that fit your skills or are the next step up: {', '.join(added)}.")
+        found[file] = (skills, suggested)
         read[resume.resolve()] = name
 
 

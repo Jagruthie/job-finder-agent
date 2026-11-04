@@ -28,6 +28,8 @@ _SEPARATOR = re.compile(r"\s*(?:\||–|—|\s-\s|,|@|\bat\b)\s*")
 _EDUCATION = re.compile(r"^(?:b|m)\.?\s?(?:tech|e|sc|com|a|s|ed|pharm|arch|des)\b|^(?:mba|bba|bca|mca|ph\.?d|diploma|"
                         r"bachelor|master|class|ssc|hsc|cbse|icse|intermediate|10th|12th|high school|secondary)\b|"
                         r"universit|college|institute|school|academy|certifi", re.I)
+_ITEM_LABEL = re.compile(r"^[A-Za-z][\w &/]{0,24}:\s*")   # 'Tools: Semrush' inside a list -> 'Semrush'
+_BEGINNER_WORDS = {"intern", "internship", "trainee", "apprentice"}
 _STOP_WORDS = {"and", "or", "the", "a", "an", "of", "to", "in", "on", "for", "with", "at", "by", "from", "as",
                "is", "are", "was", "were", "my", "our", "i", "we", "etc"}
 
@@ -96,11 +98,14 @@ class Vocab:
                 if norm(labelled.group(1)) in _NOT_SKILL_LABELS:
                     continue
                 line = labelled.group(2)
-            items = [item.strip(" .-–•·*\t") for item in re.split(r"[,;|•·()\[\]]", line)]
+            items = [_ITEM_LABEL.sub("", item.strip(" .-–•·*\t")) for item in re.split(r"[,;|•·()\[\]]", line)]
             items = [item for item in items if item]
             short = [item for item in items if len(item.split()) <= 3 and len(item) <= 30]
             if len(items) < 3 or len(short) < 0.8 * len(items):     # a list, not a sentence with commas
                 continue
+            # Pieces of a sentence are not skills: '000+ followers', 'ran Instagram', 'not polished takeaways'.
+            short = [item for item in short if not re.match(r"\d", item)
+                     and not (len(item.split()) > 1 and item[0].islower())]
             for item in short:
                 key = norm(item)
                 if (len(key) < 3 or not re.search(r"[a-z]", key) or key in known
@@ -183,6 +188,33 @@ class Vocab:
         """True if the title itself names the work, such as 'Developer' for Coding."""
         title_norm = norm(title)
         return any(has_phrase(title_norm, norm(word)) for word in self.deal_breakers.get(group, {}).get("title_words", []))
+
+    def suggest_roles(self, roles: List[str], skills: List[str], limit: int = 6) -> List[str]:
+        """Roles to offer in setup: the ones from your resume, the next step up from an intern or trainee
+        title ('Marketing Intern' also offers 'Marketing Associate' and 'Marketing Executive'), then up to
+        two built-in roles that share at least 3 of your skills. A fresher's past title alone finds only
+        intern jobs."""
+        found: List[str] = []
+        covered = set()
+
+        def add(role: str) -> None:
+            spellings = set(self.synonyms(role))
+            if not spellings & covered:
+                found.append(role)
+                covered.update(spellings)
+
+        for role in roles:
+            add(role)
+            words = role.split()
+            base = [w for w in words if norm(w) not in _BEGINNER_WORDS]
+            if base and len(base) < len(words):
+                for level in ("Associate", "Executive"):
+                    add(" ".join(base + [level]))
+        mine = set(skills)
+        overlap = {title: len(mine & set(info.get("skills", []))) for title, info in self.titles.items()}
+        for title in sorted((t for t, n in overlap.items() if n >= 3), key=lambda t: -overlap[t])[:2]:
+            add(title)
+        return found[:limit]
 
     def role_skills(self, roles: List[str]) -> List[str]:
         """Skills the built-in list gives for these roles (by name or other spelling), the ones most of the

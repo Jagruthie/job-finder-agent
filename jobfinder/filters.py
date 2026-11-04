@@ -133,12 +133,26 @@ INDIA_PLACES = ["india", "bengaluru", "bangalore", "hyderabad", "mumbai", "delhi
 _ANYWHERE = {"remote", "work", "from", "home", "anywhere", "worldwide", "global", "fully", "first"}
 
 
+# Other names a country goes by in job posts: a job in "London, UK" is in your "United Kingdom".
+_COUNTRY_NAMES = [{"united kingdom", "uk", "great britain", "britain", "england", "scotland", "wales"},
+                  {"united states", "united states of america", "usa", "us", "america"},
+                  {"united arab emirates", "uae"}, {"netherlands", "holland"}, {"south korea", "korea"}]
+
+
+def country_places(country: str) -> List[str]:
+    """Words that place a job in your country: its cities for India, otherwise its other names."""
+    key = norm(country)
+    if key == "india":
+        return INDIA_PLACES
+    return sorted(next((names for names in _COUNTRY_NAMES if key in names), {key}))
+
+
 def remote_in(location_norm: str, country: str) -> bool:
     """A remote job counts only if it is remote in your country: it names the country or one of its
     cities, or it just says 'Remote' or 'Anywhere'. 'Remote, United States' does not count for India."""
     if not country:
         return True
-    places = INDIA_PLACES if norm(country) == "india" else [norm(country)]
+    places = country_places(country)
     if any(has_phrase(location_norm, place) for place in places):
         return True
     return set(location_norm.split()) <= _ANYWHERE
@@ -172,12 +186,13 @@ def remote_elsewhere(title: str, description: str, country: str = "India") -> st
     if not country:
         return ""
     title_norm = norm(title)
-    own = INDIA_PLACES if norm(country) == "india" else [norm(country)]
+    own = country_places(country)
     if not any(has_phrase(title_norm, place) for place in own):
         for place in _COUNTRIES:
             if has_phrase(title_norm, place):
                 return f"title names {place.title() if len(place) > 4 else place.upper()}"
-    open_here = _OPEN_HERE.get(norm(country), re.compile(rf"\b{re.escape(country)}\b", re.I))
+    open_here = _OPEN_HERE.get(norm(country)) or re.compile(
+        r"\b(?:" + "|".join(re.escape(name) for name in country_places(country)) + r")\b", re.I)
     if open_here.search(description or ""):
         return ""
     for pattern in _RESTRICTED:
@@ -187,14 +202,17 @@ def remote_elsewhere(title: str, description: str, country: str = "India") -> st
     return ""
 
 
-def in_country(location: str, country: str = "India") -> bool:
-    """True if a job is in your country (any city of it) or remote and open to it. A job with no location
-    given is kept, since nothing says it is elsewhere."""
+def in_country(location: str, country: str = "India", cities: List[str] = ()) -> bool:
+    """True if a job is in your country (any city of it, or one of your own cities) or remote and open to it.
+    A job with no location given is kept, since nothing says it is elsewhere. Outside India only your
+    cities and the country's names are known, so 'London' counts for a London user."""
     location_norm = norm(location)
     if not country or not location_norm:
         return True
-    places = INDIA_PLACES if norm(country) == "india" else [norm(country)]
+    places = country_places(country)
+    own_cities = [city for city in cities if norm(city) != "remote"]
     return (any(has_phrase(location_norm, place) for place in places)
+            or location_matches(location, own_cities, country)
             or (has_phrase(location_norm, "remote") and remote_in(location_norm, country)))
 
 

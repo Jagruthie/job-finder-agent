@@ -234,7 +234,8 @@ class SourceTests(unittest.TestCase):
 class PipelineTests(unittest.TestCase):
     def run_once(self, state=None, now=NOW, settings=None, profiles=None):
         state = state if state is not None else {"first_seen": {}, "dropped": {}}
-        rows, stats, failures = run_pipeline(COMPANIES, profiles or [PM, SEO], settings or {}, VOCAB,
+        settings = settings or {"preferred_locations": ["Hyderabad", "Remote"]}   # this person lives in Hyderabad
+        rows, stats, failures = run_pipeline(COMPANIES, profiles or [PM, SEO], settings, VOCAB,
                                              state, fake_fetch, now=now)
         return rows, stats, failures, state
 
@@ -472,7 +473,7 @@ class SetupTests(unittest.TestCase):
                 saved = json.load(handle)
             self.assertIsNone(saved["min_annual_pay"])
             self.assertEqual(saved["max_experience_years"], 1)
-            self.assertEqual(saved["preferred_locations"], ["Hyderabad", "Remote"])
+            self.assertEqual(saved["preferred_locations"], ["Remote"])   # no one else's city by default
 
     def test_bad_answers_are_asked_again_with_a_message(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1261,6 +1262,55 @@ def answer_by_prompt(answers, asked=None):
                 return answer.pop(0) if isinstance(answer, list) else answer
         return ""
     return ask
+
+
+class NewcomerTests(unittest.TestCase):
+    """From a trial as a new user: a fresh marketing graduate, and someone job hunting in London."""
+    RESUME = ("Priya Test | Bengaluru | priya@example.com\n"
+              "EXPERIENCE\n"
+              "Marketing Intern | Acme Foods | Jan 2026 - Jun 2026\n"
+              "Wrote blog posts, ran Instagram, did keyword research.\n"
+              "SKILLS\n"
+              "Tools: Canva, Google Analytics, WordPress, Semrush, Excel\n"
+              "LinkedIn (1,000+ followers): weekly posts, not polished takeaways, short notes.\n")
+
+    def test_an_intern_title_also_offers_the_next_step_and_roles_that_fit_the_skills(self):
+        roles = VOCAB.suggest_roles(["Marketing Intern"], ["Content Strategy", "Content Writing", "Keyword Research",
+                                                            "Semrush", "Social Media"])
+        self.assertEqual(roles[:3], ["Marketing Intern", "Marketing Associate", "Marketing Executive"])
+        self.assertIn("SEO Executive", roles)
+        self.assertIn("Content Strategist", roles)
+        self.assertEqual(VOCAB.suggest_roles(["Data Engineer"], []), ["Data Engineer"])
+
+    def test_sentence_pieces_are_not_skills(self):
+        found = VOCAB.resume_phrases(self.RESUME)
+        self.assertIn("Canva", found)
+        for junk in ("ran Instagram", "000+ followers", "not polished takeaways", "Tools: Canva"):
+            self.assertNotIn(junk, found)
+
+    def test_setup_asks_the_country_only_for_cities_outside_india(self):
+        asked = []
+        for cities, country, expected in (("London, Remote", "United Kingdom", "United Kingdom"),
+                                          ("Banglore, Remote", "", "India")):
+            with tempfile.TemporaryDirectory() as tmp:   # a new person each time
+                run_setup(os.path.join(tmp, "settings.json"), os.path.join(tmp, "profiles"), VOCAB,
+                          say=lambda line: None, ask=answer_by_prompt(
+                              [("Cities you prefer", cities), ("Which country", country), ("Pay [", "none")], asked))
+                with open(os.path.join(tmp, "settings.json")) as handle:
+                    self.assertEqual(json.load(handle)["remote_country"], expected, cities)
+        self.assertEqual(sum("Which country" in prompt for prompt in asked), 1)   # not asked for Banglore
+
+    def test_jobs_in_your_own_city_abroad_are_kept(self):
+        jobs = [Job("demo", "x", "Acme", str(i), "Content Strategist", place, f"https://e/{i}",
+                    "Content strategy, SEO and writing. 0-1 years of experience.", NOW)
+                for i, place in enumerate(["London, UK", "Manchester, United Kingdom", "Remote, UK", "Austin, TX, USA",
+                                           "Bengaluru, India"])]
+        profile = {"name": "c", "skills": ["Content Strategy", "SEO", "Writing"], "titles": ["Content Strategist"]}
+        rows, _, _ = run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], [profile],
+                                  {"preferred_locations": ["London", "Remote"], "remote_country": "United Kingdom"},
+                                  VOCAB, {"first_seen": {}, "dropped": {}}, lambda p, b, n: jobs, now=NOW)
+        self.assertEqual(sorted(r["Location"] for r in rows),
+                         ["London, UK", "Manchester, United Kingdom", "Remote, UK"])
 
 
 class DataEngineerTrialTests(unittest.TestCase):

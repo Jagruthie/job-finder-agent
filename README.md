@@ -6,7 +6,7 @@ The repository is named `job-finder-agent`, and the command is `python -m jobfin
 
 It reads public job lists (company boards on Greenhouse, Lever and Ashby, and the remote-job boards Himalayas and Remote OK), plus job-alert emails you save from LinkedIn. It does not scrape LinkedIn or any other site, uses no paid services, and keeps your resume and settings on your own computer.
 
-> **Status: version 0.1.** Tested with fake jobs (`python -m unittest discover -s tests`, all offline) and run against live job boards in October 2026. Only tested on macOS with Python 3.14; other systems and Python versions are untested.
+> **Status: version 0.1.** Tested with fake jobs (`python -m unittest discover -s tests`, all offline) and run against live job boards in October 2026, on macOS with Python 3.14 and with the Python 3.9 that comes with macOS. Windows and Linux are untested. Built for job hunting in India: elsewhere it runs, but finds few jobs (see Known limits).
 
 ## How it works
 
@@ -22,7 +22,9 @@ It reads public job lists (company boards on Greenhouse, Lever and Ashby, and th
 
 ## Install
 
-You need Python 3 (tested with 3.14) and a terminal.
+You need Python 3.9 or newer and a terminal. On a Mac, `python3` is already there (if it asks to install developer tools, say yes).
+
+**Once, to install:**
 
 ```bash
 git clone https://github.com/Jagruthie/job-finder-agent.git
@@ -32,9 +34,19 @@ git clone https://github.com/Jagruthie/job-finder-agent.git
 cd job-finder-agent && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 ```
 
-On Windows, activate with `.venv\Scripts\activate` instead of `source .venv/bin/activate`.
+**Every time you open a new terminal**, go to the folder and switch on its Python again before any `python -m jobfinder` command. Without this step the terminal says `command not found: python`:
+
+```bash
+cd job-finder-agent && source .venv/bin/activate
+```
+
+Your prompt then starts with `(.venv)`. If you moved the folder after installing, delete the `.venv` folder and run the install line again, because it remembers the old place.
+
+**On Windows** (untested), install Python from python.org, then use `py -m venv .venv` instead of `python3 -m venv .venv`, and `.venv\Scripts\activate` instead of `source .venv/bin/activate`, both when installing and in every new terminal.
 
 ## Quick start
+
+With the folder's Python switched on (see above):
 
 ```bash
 python -m jobfinder setup     # questions, your resume, skills, roles, priorities, deal-breakers
@@ -174,16 +186,17 @@ Run `python -m jobfinder setup` again. Press Enter to keep the value in brackets
 | Question | Setting | Saved in |
 | --- | --- | --- |
 | Cities you prefer; keep or remove jobs elsewhere | `preferred_locations`, `location_mode` | `settings.json` |
+| The country you are job hunting in, asked only when your cities are not in India. Jobs in your own cities and remote jobs open to that country are kept | `remote_country` | `settings.json` |
 | Most years of experience a job may ask for (`1`, or a range such as `0-1`) | `max_experience_years` | `settings.json` |
 | Posted within how many days | `freshness_days` | `settings.json` |
 | Pay you want, typed your own way (`8 LPA`, `more than 8 lakhs`, `6-12 LPA`, `up to 10 LPA`, `$80k`), and keep or remove jobs outside it | `min_annual_pay`, `max_annual_pay`, `pay_currency`, `pay_mode` | `settings.json` |
 | Your resume (optional on later runs). Read locally; not copied, and its path is not saved | — | — |
 | Skills found in your resume, which you confirm or edit in your own words. Items from your resume's skill lists (such as "Tools: Power BI, Tableau") are picked up, including ones in brackets such as "AWS (S3, EC2)"; never your name, email, phone, cities, jobs or education | `skills` | `profiles/<name>.json` |
-| Roles found in your resume (such as "Data Engineer" in your job history), which you confirm or edit. A role that looks mistyped ("Data Enginner") is offered the right spelling. Can be empty: the track then matches by skills only | `titles` | `profiles/<name>.json` |
+| Roles found in your resume (such as "Data Engineer" in your job history), plus the next step up from an intern or trainee title ("Marketing Intern" also offers Marketing Associate and Marketing Executive) and up to two built-in roles that share 3 or more of your skills. You confirm or edit them. A role that looks mistyped ("Data Enginner") is offered the right spelling. Can be empty: the track then matches by skills only | `titles` | `profiles/<name>.json` |
 | Deal-breakers: work these jobs must not depend on (Coding), or none | `deal_breakers` | `profiles/<name>.json` |
 | Priority skills (optional): what the jobs should mainly be about; they count more. One that is not in your skills list is added to it | `priority_skills` | `profiles/<name>.json` |
 
-Other settings you can edit by hand in `settings.json`: `remote_country` (default India), `remote_sources` (`[]` turns the remote boards off), `starter_companies`, `match_share` (45: % of the day's best match a job needs when its title is not one of your roles), `match_min_skills` (3), `deal_breaker_remove` (4), `deal_breaker_flag` (2), `exclude_title_words` and `request_delay_seconds`. Backup copies named `*.backup.json` in `profiles/` are ignored.
+Other settings you can edit by hand in `settings.json`: `remote_sources` (`[]` turns the remote boards off), `starter_companies`, `match_share` (45: % of the day's best match a job needs when its title is not one of your roles), `match_min_skills` (3), `deal_breaker_remove` (4), `deal_breaker_flag` (2), `exclude_title_words` and `request_delay_seconds`. Backup copies named `*.backup.json` in `profiles/` are ignored.
 
 **How pay works.** In `prefer` mode, jobs whose stated pay is outside your range stay on the list but rank lower; in `require` mode they are removed. Jobs that do not state pay are always kept, because most postings do not. Pay is compared only when the posting uses your currency, and it is never converted. Monthly pay is multiplied by 12. Hourly pay, and bare numbers with no sign of a period, are treated as not comparable.
 
@@ -195,6 +208,7 @@ Never committed (see `.gitignore`): your resumes, `profiles/` (except `example.j
 
 - **Coverage.** Company boards are read only for Greenhouse, Lever and Ashby, and only for the companies on the built-in list and your own. Many companies in India use other systems (Workday, their own career sites) or post only on LinkedIn and Naukri, which this agent cannot read; saved LinkedIn alert emails cover some of that.
 - **Dates can mislead.** Greenhouse dates change when a company edits a job, and alert emails have no posting date, so a few older jobs will look fresh.
+- **Outside India, few jobs.** It runs anywhere and keeps jobs in your own cities and your country, but the built-in companies were chosen for India and only Indian city names are known, so a job in "Leeds" counts for a London user only if it names the country. Add companies near you with `add`.
 - **Any field works, but the companies are mostly tech.** The built-in companies hire mostly in tech, product, data, sales and operations, so finance, design or healthcare will find fewer jobs.
 - **Matching is word matching.** It finds words, not ideas: "built dashboards" does not count as Power BI, and "talent acquisition" counts as "recruiting" only if `data/skills.json` lists them as spellings of each other. Use the words job posts use. Very short skills (Go, R, C++) are not picked up from resumes, because their letters match ordinary words.
 - **Matches by skills alone are a wider net.** On real postings the top matches were right, with some loose ones further down. Raise `match_share` or `match_min_skills` to be stricter.

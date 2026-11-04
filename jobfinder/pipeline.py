@@ -7,9 +7,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Tuple
 
-from .filters import (INDIA_PLACES, NOT_STATED, TOO_SENIOR, WITHIN, entry_level_title, experience_bucket,
-                      has_excluded_word, higher_level_title, in_country, location_matches, parse_annual_pay,
-                      pay_from_text, remote_elsewhere, remote_in, SENIOR_ROLE_PHRASES, shift_mentioned)
+from .filters import (NOT_STATED, SENIOR_ROLE_PHRASES, TOO_SENIOR, WITHIN, country_places, entry_level_title,
+                      experience_bucket, has_excluded_word, higher_level_title, in_country, location_matches,
+                      parse_annual_pay, pay_from_text, remote_elsewhere, remote_in, shift_mentioned)
 from .match import Corpus, JobTerms, Query, score
 from .models import Job
 from .sources import SourceError
@@ -19,7 +19,7 @@ from .vocab import Vocab
 DEFAULT_SETTINGS = {
     "freshness_days": 7,
     "max_experience_years": 1,
-    "preferred_locations": ["Hyderabad", "Remote"],
+    "preferred_locations": ["Remote"],   # setup asks for your own cities
     "location_mode": "prefer",          # "prefer" ranks higher, "require" drops other places
     "remote_country": "India",          # "Remote" in your cities means remote in this country (empty: anywhere)
     "remote_sources": ["himalayas", "remoteok"],   # searched when "Remote" is one of your cities; [] turns them off
@@ -225,11 +225,13 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
             continue
         loc_ok = location_matches(job.location, cfg["preferred_locations"], cfg["remote_country"])
         # "Keep jobs in other cities" means other cities of your country (remote_country), not abroad.
-        if cfg["location_mode"] == "require" and not loc_ok or not in_country(job.location, cfg["remote_country"]):
+        here = in_country(job.location, cfg["remote_country"], cfg["preferred_locations"])
+        if cfg["location_mode"] == "require" and not loc_ok or not here:
             stats["location_dropped"] += 1
             continue
-        if (has_phrase(norm(job.location), "remote") and remote_in(norm(job.location), cfg["remote_country"])
-                and not any(has_phrase(norm(job.location), place) for place in INDIA_PLACES)
+        location_norm = norm(job.location)
+        if (has_phrase(location_norm, "remote") and remote_in(location_norm, cfg["remote_country"])
+                and not any(has_phrase(location_norm, place) for place in country_places(cfg["remote_country"]))
                 and remote_elsewhere(job.title, job.description, cfg["remote_country"])):
             stats["location_dropped"] += 1     # 'Remote', but the post says US time zones or the title says Poland
             continue
