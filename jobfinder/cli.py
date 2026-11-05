@@ -1,104 +1,61 @@
+"""The terminal layer: reads your command, calls the core, prints what comes back. No job-search logic lives here."""
 from __future__ import annotations
 
 import argparse
-import json
-import time
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
-from .alerts import read_alerts
-from .demo import demo_data
-from .discover import (YC_HIRING, append_companies, check_board, extract_boards, find_board, known_boards,
-                       yc_candidates)
-from .filters import INDIA_PLACES
-from .pipeline import (DEFAULT_SETTINGS, ProfileError, clean_list, clean_locations, is_backup, load_state,
-                       profile_files, read_companies, run_pipeline, save_state, write_csv)
-from .resume import read_resume_text
+from .config import COMPANY_STATUSES, OUTREACH_STATUSES, STARTER_COMPANIES, TIERS, TRACKER_SOURCES, TRACKER_STATUSES, load_config  # noqa: F401
+from .core import discovery, profiles as core_profiles, review as core_review, runner, today as core_today, tracker, watchlist
+from .core.runner import prefetch  # noqa: F401
+from .errors import FreshlistError, ProfileError
+from .pipeline import clean_list
 from .setup import run_setup
-from .sources import SourceError, fetch_board, http_get_json
-from .sources.remote import SOURCES as REMOTE_SOURCES, fetch_remote
-from .textutil import norm
+from .sources import SourceError
 from .vocab import Vocab
 
 
-STARTER_COMPANIES = Path(__file__).resolve().parent.parent / "data" / "companies-starter.csv"
-
-
-class Fetched:
-    """Job lists read ahead of screening, handed out in the order the pipeline asks for them."""
-
-    def __init__(self):
-        self.results = {}
-
-    def read(self, platform: str, board: str, name: str):
-        result = self.results[(platform, board, name)]
-        if isinstance(result, SourceError):
-            raise result
-        return result
-
-
-def prefetch(companies: List[dict], fetch, delay: float, sleep=time.sleep) -> Fetched:
-    """Read every job list first: each site (Greenhouse, Lever, Ashby, Himalayas...) one request at a time with
-    the polite delay between them, and the sites side by side, so many companies do not take many minutes."""
-    by_site = {}
-    for company in companies:
-        by_site.setdefault(company["platform"], []).append(company)
-    fetched = Fetched()
-
-    def read_site(items: List[dict]) -> None:
-        for index, company in enumerate(items):
-            if index:
-                sleep(delay)
-            key = (company["platform"], company["board"], company["name"])
-            try:
-                fetched.results[key] = fetch(*key)
-            except SourceError as error:
-                fetched.results[key] = error
-            except Exception as error:   # a dropped connection or a malformed reply fails one company, not the run
-                fetched.results[key] = SourceError(f"{type(error).__name__}: {error}")
-
-    with ThreadPoolExecutor(max_workers=max(1, len(by_site))) as pool:
-        list(pool.map(read_site, by_site.values()))
-    return fetched
-
-
-def load_settings(path: str) -> dict:
-    settings = dict(DEFAULT_SETTINGS)
-    file = Path(path)
-    if file.exists():
-        settings.update({k: v for k, v in json.loads(file.read_text(encoding="utf-8")).items()
-                         if not k.startswith("_")})
-    else:
-        print(f"(no {file}; using built-in defaults)")
-    settings["preferred_locations"] = clean_locations(settings.get("preferred_locations")) or list(
-        DEFAULT_SETTINGS["preferred_locations"])
-    return settings
+def _config(args) -> dict:
+    cfg = load_config(getattr(args, "settings", None), getattr(args, "data_dir", None))
+    if not cfg["settings_found"]:
+        print(f"(no {cfg['settings_path']}; using built-in defaults)")
+    for attribute, key in (("companies", "companies_file"), ("profiles_dir", "profiles_dir"), ("state", "seen_file"),
+                           ("inbox", "inbox_dir"), ("cache", "cache_dir"), ("out_dir", "output_dir")):
+        if getattr(args, attribute, None):
+            cfg[key] = getattr(args, attribute)
+    return cfg
 
 
 def load_profiles(paths: List[str]) -> List[dict]:
-    profiles = []
-    for path in paths:
-        if is_backup(path):
-            print(f"(skipping {path}: it is a backup copy, not a profile)")
-            continue
-        profile = json.loads(Path(path).read_text(encoding="utf-8"))
-        profile.setdefault("name", Path(path).stem)
-        profiles.append(profile)
-    return profiles
+    loaded, notes = core_profiles.load(paths)
+    for note in notes:
+        print(f"({note})")
+    return loaded
 
 
-def profile_paths(args) -> List[str]:
+def profile_paths(args, cfg: dict) -> List[str]:
     """The profiles named with --profiles, or else every profile in the profiles folder (one per track)."""
     if args.profiles:
         return args.profiles
-    paths = [str(f) for f in profile_files(args.profiles_dir)]
+    paths = core_profiles.find_paths(cfg)
     if paths:
-        print(f"Using every profile in {args.profiles_dir}/: {', '.join(Path(p).name for p in paths)}")
+        print(f"Using every profile in {cfg['profiles_dir']}/: {', '.join(Path(p).name for p in paths)}")
     else:
-        print(f"No profiles found in {args.profiles_dir}/. Run 'python -m jobfinder setup' and give your resume.")
+        print(f"No profiles found in {cfg['profiles_dir']}/. Run 'python -m jobfinder setup' and give your resume.")
     return paths
+
+
+def _cell(value) -> str:
+    return "" if value is None else str(value)
+
+
+def print_table(rows: List[dict], columns: List[str]) -> None:
+    if not rows:
+        return
+    widths = {c: min(40, max(len(c), *(len(_cell(row.get(c))) for row in rows))) for c in columns}
+    print("  ".join(c.ljust(widths[c]) for c in columns))
+    for row in rows:
+        print("  ".join(_cell(row.get(c))[:widths[c]].ljust(widths[c]) for c in columns))
 
 
 def print_profiles(profiles: List[dict]) -> None:
@@ -108,27 +65,31 @@ def print_profiles(profiles: List[dict]) -> None:
               f"looking for roles: {', '.join(titles) if titles else '(none)'}")
 
 
+def _stat(stats: dict, key: str) -> int:
+    return stats.get(key, 0)
+
+
 def print_summary(stats, failures, settings, rows=(), profiles=()) -> None:
-    print(f"\nCompanies read: {stats['boards_ok']} ok, {stats['boards_failed']} failed")
+    print(f"\nCompanies read: {_stat(stats, 'boards_ok')} ok, {_stat(stats, 'boards_failed')} failed")
     for failure in failures:
         print(f"  - {failure}")
-    print(f"Jobs seen: {stats['jobs_seen']}")
-    if stats["duplicates_merged"]:
+    print(f"Jobs seen: {_stat(stats, 'jobs_seen')}")
+    if _stat(stats, "duplicates_merged"):
         print(f"  the same opening posted more than once, shown once: {stats['duplicates_merged']}")
-    print(f"  removed as stale (older than {settings['freshness_days']} days): {stats['stale_dropped']}")
-    print(f"  skipped, already removed earlier: {stats['already_dropped']}")
-    print(f"  not a strong enough match for your roles and skills: {stats['weak_match']}")
-    print(f"  too senior (title or years): {stats['senior_title'] + stats['too_senior']}")
-    print(f"  removed by your deal-breakers (for example coding-heavy): {stats['deal_breaker']}")
-    print(f"  dropped for location: {stats['location_dropped']}")
-    print(f"  dropped for pay outside your range: {stats['pay_dropped']}")
-    print(f"Kept: {stats['kept']} (of which experience not stated: {stats['kept_experience_not_stated']}; "
-          f"matched by your roles: {stats['kept_by_title']}; by your skills only: {stats['kept_by_skills']})")
+    print(f"  removed as stale (older than {settings['freshness_days']} days): {_stat(stats, 'stale_dropped')}")
+    print(f"  skipped, already removed earlier: {_stat(stats, 'already_dropped')}")
+    print(f"  not a strong enough match for your roles and skills: {_stat(stats, 'weak_match')}")
+    print(f"  too senior (title or years): {_stat(stats, 'senior_title') + _stat(stats, 'too_senior')}")
+    print(f"  removed by your deal-breakers (for example coding-heavy): {_stat(stats, 'deal_breaker')}")
+    print(f"  dropped for location: {_stat(stats, 'location_dropped')}")
+    print(f"  dropped for pay outside your range: {_stat(stats, 'pay_dropped')}")
+    print(f"Kept: {_stat(stats, 'kept')} (of which experience not stated: {_stat(stats, 'kept_experience_not_stated')}; "
+          f"matched by your roles: {_stat(stats, 'kept_by_title')}; by your skills only: {_stat(stats, 'kept_by_skills')})")
     if len(profiles) > 1:
         print("  per track: " + ", ".join(f"{p['name']} {sum(r['Track'] == p['name'] for r in rows)}"
                                          for p in profiles))
     for profile in profiles:
-        if not any(r["Track"] == profile["name"] for r in rows) and stats["jobs_seen"]:
+        if not any(r["Track"] == profile["name"] for r in rows) and _stat(stats, "jobs_seen"):
             print(f"  No strong matches for track '{profile['name']}' today; nothing weaker was added to fill it.")
 
 
@@ -152,284 +113,403 @@ def print_preview(rows: List[dict], profiles=()) -> None:
         print(f"   apply: {row['Apply link']}")
 
 
-def cmd_add(args) -> int:
-    """Turn job links (or a saved page of search results) into companies to watch."""
-    text = []
-    for item in args.links:
-        file = Path(item).expanduser()
-        text.append(file.read_text(encoding="utf-8", errors="ignore") if file.is_file() else item)
-    boards = extract_boards("\n".join(text))
-    if not boards:
-        print("No Greenhouse, Lever or Ashby job links found. Links look like jobs.lever.co/acme, "
-              "boards.greenhouse.io/acme or jobs.ashbyhq.com/acme.")
-        return 1
-    known = known_boards(args.companies)
-    new = [pair for pair in boards if pair not in known]
-    if len(new) < len(boards):
-        print(f"Already in {args.companies}: {', '.join(b for p, b in boards if (p, b) in known)}")
-    settings = load_settings(args.settings)
-    preferred = settings["preferred_locations"]
-    print(f"Checking {len(new)} companies' public job lists ({', '.join(preferred)} = your cities)...")
-    results = []
-    for index, (platform, board) in enumerate(new):
-        if index:
-            time.sleep(settings["request_delay_seconds"])
-        result = check_board(platform, board, preferred, fetch_board, settings["remote_country"])
-        results.append(result)
-        if result["ok"]:
-            print(f"  {board} ({platform}): {result['jobs']} jobs, {result['in_your_cities']} in your cities, "
-                  f"{result['in_india']} in India or remote")
-        else:
-            print(f"  {board} ({platform}): could not read ({result['error']})")
-    wanted = [r for r in results if r["ok"] and (r["in_your_cities"] or (args.all and r["jobs"]))]
-    if not wanted:
-        print("\nNone of these has open jobs in your cities, so nothing was added. "
-              "Use --all to add companies with jobs anywhere.")
-        return 0
-    print(f"\nTo add: {', '.join(r['board'] for r in wanted)}")
-    answer = "yes" if args.yes else input(f"Add these {len(wanted)} to {args.companies}? (yes or no) [yes]: ")
-    if answer.strip().lower() not in ("", "y", "yes"):
-        print("Nothing was added.")
-        return 0
-    append_companies(args.companies, wanted)
-    print(f"Added {len(wanted)} companies to {args.companies}. Open it to fix a company name if you like.")
-    return 0
+def print_matches(matches: List[dict]) -> None:
+    for match in matches:
+        print(f"\n{match['number']}. {match['role']} at {match['company']}  [{match['track']}]")
+        print(f"   {match['location'] or 'location not stated'} | posted {match['posted_date']} | {match['matched_by']}")
+        print(f"   apply: {match['apply_link']}")
 
 
-def _confirm_and_add(args, results: List[dict]) -> int:
-    """Add the companies with jobs in your country (or remote in it), after asking."""
-    wanted = [r for r in results if r["ok"] and (r["in_india"] or (args.all and r["jobs"]))]
+def _confirm_and_add(args, cfg, wanted: List[dict], how: str) -> int:
     if not wanted:
-        print("\nNone of these has open jobs in India or remote-India, so nothing was added.")
+        print(f"\nNone of these has open jobs {how}, so nothing was added. Use --all to add companies with jobs anywhere.")
         return 0
     print(f"\nTo add ({len(wanted)}): {', '.join(r.get('name') or r['board'] for r in wanted)}")
-    answer = "yes" if args.yes else input(f"Add these {len(wanted)} to {args.companies}? (yes or no) [yes]: ")
+    answer = "yes" if args.yes else input(f"Add these {len(wanted)} to your watch-list? (yes or no) [yes]: ")
     if answer.strip().lower() not in ("", "y", "yes"):
         print("Nothing was added.")
         return 0
-    append_companies(args.companies, wanted)
-    print(f"Added {len(wanted)} companies to {args.companies}. Every run now reads them and applies your filters.")
+    added = discovery.add_results(cfg, wanted)
+    print(f"Added {len(added['added'])} companies to your watch-list. Open it to fix a company name if you like.")
     return 0
+
+
+def cmd_add(args) -> int:
+    """Turn job links (or a saved page of search results) into companies to watch."""
+    cfg = _config(args)
+    boards = discovery.boards_in(args.links)
+    if not boards:
+        print("No Greenhouse, Lever or Ashby job links found. Links look like jobs.lever.co/acme, "
+              "boards.greenhouse.io/acme or jobs.ashbyhq.com/acme. For any other page use: companies add <link>")
+        return 1
+    known = discovery.known_boards(cfg)
+    new = [pair for pair in boards if pair not in known]
+    if len(new) < len(boards):
+        print(f"Already in your watch-list: {', '.join(b for p, b in boards if (p, b) in known)}")
+    print(f"Checking {len(new)} companies' public job lists ({', '.join(cfg['preferred_locations'])} = your cities)...")
+
+    def show(result):
+        if result["ok"]:
+            print(f"  {result['board']} ({result['platform']}): {result['jobs']} jobs, {result['in_your_cities']} in "
+                  f"your cities, {result['in_india']} in India or remote")
+        else:
+            print(f"  {result['board']} ({result['platform']}): could not read ({result['error']})")
+    results = discovery.check_boards(cfg, new, progress=show)
+    return _confirm_and_add(args, cfg, [r for r in results if r["ok"] and (r["in_your_cities"] or (args.all and r["jobs"]))],
+                            "in your cities")
 
 
 def cmd_discover(args) -> int:
-    """Find companies to watch from Y Combinator's list of hiring companies."""
-    settings = load_settings(args.settings)
-    places = settings["preferred_locations"] + (INDIA_PLACES if norm(settings["remote_country"]) == "india" else [])
-    places = [p for p in places if norm(p) != "remote"] + (["remote"] if args.remote else [])
-    print("Reading Y Combinator's list of hiring companies (unofficial daily copy, read on this computer only)...")
-    try:
-        companies = http_get_json(YC_HIRING, timeout=60)
-    except SourceError as error:
-        print(f"Could not read the list: {error}")
-        return 1
-    candidates = yc_candidates(companies, places)
-    known = known_boards(args.companies)
-    print(f"{len(companies)} YC companies are hiring; {len(candidates)} list "
-          f"{'your places or remote' if args.remote else 'your places'}. Looking for their job boards...")
-    if args.limit:
-        candidates = candidates[:args.limit]
-    results = []
-    for index, company in enumerate(candidates):
-        if index:
-            time.sleep(0.4)
-        result = find_board(company, lambda platform, board: check_board(
-            platform, board, settings["preferred_locations"], fetch_board, settings["remote_country"]), time.sleep)
-        if result["ok"] and (result["platform"], result["board"]) in known:
+    """Optional, off by default: find companies from Y Combinator's list of hiring companies."""
+    cfg = _config(args)
+    cfg["use_yc_discovery"] = cfg["use_yc_discovery"] or args.enable
+
+    def show(result):
+        if result.get("already_listed"):
             print(f"  {result['name']}: already on your list")
-            continue
-        results.append(result)
-        if result["ok"]:
+        elif result["ok"]:
             print(f"  {result['name']} ({result['platform']}/{result['board']}): {result['jobs']} jobs, "
                   f"{result['in_your_cities']} in your cities, {result['in_india']} in India or remote")
         else:
             print(f"  {result['name']}: {result['error']}")
-    found = sum(r["ok"] for r in results)
-    print(f"\nFound job boards for {found} of {len(results)} companies. "
-          "The rest post jobs somewhere this agent cannot read.")
-    return _confirm_and_add(args, results)
+    if cfg["use_yc_discovery"]:
+        print("Reading Y Combinator's list of hiring companies (unofficial daily copy, read on this computer only)...")
+    found = discovery.find_yc(cfg, args.remote, args.limit, progress=show)
+    results = found["results"]
+    print(f"{found['hiring']} YC companies are hiring; {found['candidates']} list your places.")
+    print(f"Found job boards for {sum(r['ok'] for r in results)} of {len(results)} companies. "
+          "The rest post jobs somewhere Freshlist cannot read.")
+    return _confirm_and_add(args, cfg, [r for r in results if r["ok"] and (r["in_india"] or (args.all and r["jobs"]))],
+                            "in India or remote-India")
 
 
 def cmd_setup(args) -> int:
-    run_setup(args.settings, args.profiles_dir, Vocab.load())
+    cfg = load_config(args.settings, args.data_dir)
+    run_setup(cfg["settings_path"], args.profiles_dir or str(Path(cfg["data_dir"]) / cfg["profiles_dir"]), Vocab.load())
+    print("\nNext: add companies with 'python -m jobfinder companies add <careers link>', then "
+          "'python -m jobfinder run'.")
     return 0
 
 
 def cmd_profile(args) -> int:
-    vocab = Vocab.load()
-    text = read_resume_text(args.resume)
-    skills = vocab.extract_skills(text) + vocab.resume_phrases(text)
-    titles = vocab.resume_titles(text)
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    target = out_dir / f"{args.name}.json"
-    target.write_text(json.dumps({
-        "_note": "From your resume. Delete skills that are wrong, add ones the agent missed in your own words, and fix the titles.",
-        "name": args.name,
-        "skills": skills,
-        "titles": titles,
-    }, indent=2), encoding="utf-8")
-    print(f"Found {len(skills)} skills and {len(titles)} roles in your resume.")
-    print(f"Skills: {', '.join(skills) or '(none)'}")
-    print(f"Roles: {', '.join(titles) or '(none)'}")
+    profile = core_profiles.from_resume(args.resume, args.name, args.out_dir)
+    print(f"Found {len(profile['skills'])} skills and {len(profile['titles'])} roles in your resume.")
+    print(f"Skills: {', '.join(profile['skills']) or '(none)'}")
+    print(f"Roles: {', '.join(profile['titles']) or '(none)'}")
     print("\nNow run: python -m jobfinder setup")
     print("It shows these skills and roles for you to confirm. This is the confirm step.")
     return 0
 
 
 def cmd_demo(args) -> int:
-    """Run the full pipeline on built-in FAKE jobs. Nothing is fetched and no memory is saved."""
-    vocab = Vocab.load()
-    settings = load_settings(args.settings)
-    profiles = load_profiles(profile_paths(args))
+    """The filter on built-in FAKE jobs. Nothing is fetched and nothing is remembered."""
+    cfg = _config(args)
+    profiles = load_profiles(profile_paths(args, cfg))
     if not profiles:
         return 1
-    now = datetime.now(timezone.utc)
-    companies, jobs = demo_data(now)
-    state = {"first_seen": {}, "dropped": {}}
     print_profiles(profiles)
     try:
-        rows, stats, failures = run_pipeline(companies, profiles, settings, vocab, state,
-                                             lambda platform, board, name: jobs[board], now=now)
+        result = runner.demo(cfg, profiles)
     except ProfileError as error:
         print(f"\n{error}")
         print("Kept: 0 (the demo stopped before screening any jobs)")
         return 1
-    out_path = Path(args.out_dir) / f"demo-{now.date().isoformat()}.csv"
-    write_csv(rows, str(out_path))
     print("DEMO MODE: these jobs are fake. Nothing was fetched from the internet.")
-    print_summary(stats, failures, settings, rows, profiles)
-    print_preview(rows, profiles)
-    print(f"\nWrote {out_path}")
+    print_summary(result.stats, result.failures, cfg, result.rows, profiles)
+    print_preview(result.rows, profiles)
+    print(f"\nWrote {result.csv_path}")
     return 0
 
 
 def cmd_run(args) -> int:
-    vocab = Vocab.load()
-    settings = load_settings(args.settings)
-    profiles = load_profiles(profile_paths(args))
+    cfg = _config(args)
+    cfg["use_starter_companies"] = cfg["use_starter_companies"] or args.starter
+    cfg["use_remote_boards"] = cfg["use_remote_boards"] or args.remote_boards
+    cfg["use_alert_emails"] = cfg["use_alert_emails"] or args.alert_emails
+    profiles = load_profiles(profile_paths(args, cfg))
     if not profiles:
         return 1
-    companies = read_companies(args.companies) if Path(args.companies).exists() else []
-    if settings["starter_companies"] and STARTER_COMPANIES.exists():
-        own = {(c["platform"].lower(), c["board"].lower()) for c in companies}
-        companies += [c for c in read_companies(str(STARTER_COMPANIES))
-                      if (c["platform"].lower(), c["board"].lower()) not in own]
-    alert_jobs, notes = read_alerts(args.inbox)
-    for note in notes:
-        print(f"(inbox) {note}")
-    if alert_jobs:
-        print(f"Read {len(alert_jobs)} jobs from job-alert emails in {args.inbox}/")
-        companies.append({"name": "Job-alert emails", "platform": "alerts", "board": args.inbox})
-    wants_remote = any(norm(place) == "remote" for place in settings["preferred_locations"])
-    remote = [s for s in settings["remote_sources"] if s in REMOTE_SOURCES] if wants_remote else []
-    for source in remote:
-        companies.append({"name": f"{source} (remote jobs)", "platform": source, "board": "remote"})
-    if remote:
-        print(f"Searching remote jobs open to {settings['remote_country'] or 'anyone'} on: {', '.join(remote)}")
-    # With Remote chosen, Himalayas is also searched for each of your roles, which reaches matching jobs too far
-    # down its feed to be read in full.
-    queries = list(dict.fromkeys(title for profile in profiles for title in clean_list(profile.get("titles", []))))
-    if "himalayas" in remote and queries:
-        print(f"  and Himalayas for your roles: {', '.join(queries)}")
-    else:
-        queries = []
-    if not companies:
-        print("No companies found and no job-alert emails. Add rows to companies.csv "
-              f"or save alert emails (.eml) in {args.inbox}/.")
-        return 1
-
-    state = load_state(args.state)
-    now = datetime.now(timezone.utc)
-    warnings: List[str] = []      # parts of a source that could not be read, said again at the end
-
-    def fetch(platform: str, board: str, name: str):
-        if platform == "alerts":
-            return alert_jobs
-        if platform in REMOTE_SOURCES:
-            return fetch_remote(platform, settings, now, http_get_json, time.sleep, args.cache, queries=queries,
-                                warn=warnings.append)
-        return fetch_board(platform, board, name)
-
     print_profiles(profiles)
-    sites = {company["platform"] for company in companies}
-    longest = max(sum(c["platform"] == site for c in companies) for site in sites)
-    print(f"\nReading {len(companies)} job lists, {len(sites)} sites side by side "
-          f"(about {max(1, round(longest * (settings['request_delay_seconds'] + 5) / 60))} min)...")
-    fetched = prefetch(companies, fetch, settings["request_delay_seconds"])
-    try:
-        rows, stats, failures = run_pipeline(companies, profiles, settings, vocab, state,
-                                             lambda platform, board, name: fetched.read(platform, board, name),
-                                             now=now)
-    except ProfileError as error:
-        print(f"\n{error}")
-        return 1
-    save_state(args.state, state)
+    print("\nReading job pages, one request at a time per site...")
 
-    out_path = Path(args.out_dir) / f"jobs-{now.date().isoformat()}.csv"
-    write_csv(rows, str(out_path))
-    print_summary(stats, failures, settings, rows, profiles)
-    if warnings:
-        print("\nSome jobs could not be read today, so this list may be missing some (run again later to retry):")
-        for warning in warnings:
-            print(f"  - {warning}")
-    print(f"\nWrote {out_path}")
+    def show(step):
+        state = f"{step['jobs']} jobs" if step["ok"] else f"could not read ({step['error']})"
+        print(f"  [{step['done']}/{step['total']}] {step['company']}: {state}")
+    result = runner.run(cfg, profiles, Vocab.load(), progress=show)
+    for note in result.notes:
+        print(f"(inbox) {note}")
+    print(f"\nSources: {', '.join(result.sources)}")
+    print(f"Companies read: {result.companies_read}; failed: {len(result.failed)}; "
+          f"cannot be read (not Greenhouse, Lever or Ashby): {len(result.skipped)}")
+    for failure in result.failed:
+        print(f"  - {failure['company']} ({failure['platform']}/{failure['board']}): {failure['error']}")
+    for skipped in result.skipped:
+        print(f"  - {skipped['company']}: {skipped['reason']}")
+    for warning in result.warnings:
+        print(f"  - {warning}")
+    if not result.saved:
+        print("\nNo company could be read, so nothing was remembered. Check your connection and run again.")
+        return 1
+    stats = result.stats
+    print(f"\nJobs seen: {_stat(stats, 'jobs_seen')}. Removed: older than {cfg['freshness_days']} days "
+          f"{_stat(stats, 'stale_dropped') + _stat(stats, 'already_dropped')}, too senior "
+          f"{_stat(stats, 'senior_title') + _stat(stats, 'too_senior')}, location {_stat(stats, 'location_dropped')}, "
+          f"pay {_stat(stats, 'pay_dropped')}, deal-breakers {_stat(stats, 'deal_breaker')}, "
+          f"not a strong match {_stat(stats, 'weak_match')}.")
+    print(f"New matches: {len(result.new_matches)} (already shown on earlier runs, left out: {result.already_shown})")
+    print_matches(result.new_matches)
+    if result.new_matches:
+        print("\nLog one with: python -m jobfinder tracker add --from-run <number>")
+    print(f"\nWrote {result.csv_path}")
     return 0
 
 
-def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="jobfinder", description="Find fresh, skill-matched jobs on company career pages.")
+def _print_companies(rows: List[dict]) -> None:
+    if not rows:
+        print("Your watch-list is empty. Add a company with: python -m jobfinder companies add <careers link>")
+    print_table(rows, ["company", "platform", "tier", "status", "added_date", "last_match_date", "careers_url"])
+
+
+def cmd_companies(args) -> int:
+    cfg = _config(args)
+    action = args.action
+    if action == "add":
+        row = watchlist.add(cfg, args.url, args.name, args.tier, notes=args.notes)
+        print(f"Added {row['company']} ({row['platform']}, {row['tier']}).")
+        if row["platform"] == "other":
+            print("This is not a Greenhouse, Lever or Ashby page, so it is listed but cannot be read on a run.")
+    elif action == "list":
+        _print_companies(watchlist.list_companies(cfg, args.tier, args.status))
+    elif action == "set-tier":
+        row = watchlist.set_tier(cfg, args.company, args.value)
+        print(f"{row['company']} is now tier {row['tier']}.")
+    elif action == "set-status":
+        row = watchlist.set_status(cfg, args.company, args.value)
+        print(f"{row['company']} is now {row['status']}.")
+    elif action == "import":
+        result = watchlist.import_csv(cfg, args.file)
+        print(f"Added {len(result['added'])} companies; skipped {len(result['skipped'])}.")
+        for item in result["skipped"]:
+            print(f"  - {item['company']}: {item['reason']}")
+    elif action == "migrate":
+        result = watchlist.migrate(cfg)
+        print(f"Converted {result['migrated']} companies to the watch-list columns.")
+        print(f"The old file is kept as {result['backup']}.")
+    return 0
+
+
+_TRACKER_FIELDS = ["company", "role", "apply_link", "posted_date", "source", "resume_version", "changes_made",
+                   "how_i_would_explain_it", "founder_x_handle", "company_email", "applied_date", "outreach_status",
+                   "followup_date", "status", "notes"]
+
+
+def _tracker_fields(args) -> dict:
+    return {name: getattr(args, name) for name in _TRACKER_FIELDS if getattr(args, name) is not None}
+
+
+def _print_entries(rows: List[dict]) -> None:
+    print_table(rows, ["id", "company", "role", "status", "source", "resume_version", "applied_date",
+                       "followup_date", "outreach_status"])
+
+
+def cmd_tracker(args) -> int:
+    cfg = _config(args)
+    action = args.action
+    if action == "add":
+        fields = _tracker_fields(args)
+        entry = (tracker.add_from_run(cfg, args.from_run, **fields) if args.from_run is not None
+                 else tracker.add(cfg, **fields))
+        print(f"Added {entry['id']}: {entry['role']} at {entry['company']} ({entry['status']}).")
+    elif action == "update":
+        entry = tracker.update(cfg, args.id, **_tracker_fields(args))
+        print(f"Updated {entry['id']}: {entry['role']} at {entry['company']} ({entry['status']}"
+              + (f", follow up on {entry['followup_date']}" if entry["followup_date"] else "") + ").")
+    elif action == "list":
+        rows = tracker.list_entries(cfg, args.status)
+        if not rows:
+            print("No tracker entries" + (f" with status {args.status}." if args.status else " yet."))
+        _print_entries(rows)
+        for problem in tracker.problems(cfg):
+            print(f"\nWarning, {problem['id']}: {problem['problem']}")
+    elif action == "due":
+        rows = tracker.due(cfg)
+        if not rows:
+            print("No follow-ups due.")
+        print_table(rows, ["id", "company", "role", "applied_date", "followup_date", "days_overdue"])
+    elif action == "export":
+        print(f"Wrote {tracker.export_xlsx(cfg, args.out, args.status)}")
+    return 0
+
+
+def cmd_today(args) -> int:
+    cfg = _config(args)
+    plan = core_today.checklist(cfg, override=args.day or "")
+    print(f"{plan['date']}: Day {plan['day']}" + (" (your choice)" if plan["chosen_by"] == "override" else "") + "\n")
+    for step in plan["steps"]:
+        print(f"[{'x' if step['done'] else ' '}] {step['text']}")
+    if plan["day"] == "A":
+        if plan["new_matches"]:
+            print("\nToday's new matches:")
+            print_table(plan["new_matches"], ["number", "company", "role", "posted_date", "in_tracker", "apply_link"])
+        if plan["to_apply"]:
+            print("\nIn the tracker, not applied yet:")
+            _print_entries(plan["to_apply"])
+    else:
+        if plan["outreach_pending"]:
+            print("\nApplications waiting for outreach:")
+            print_table(plan["outreach_pending"], ["id", "company", "role", "applied_date", "founder_x_handle", "company_email"])
+        if plan["followups_due"]:
+            print("\nFollow-ups due:")
+            print_table(plan["followups_due"], ["id", "company", "role", "followup_date", "days_overdue"])
+    return 0
+
+
+def cmd_review(args) -> int:
+    cfg = _config(args)
+    report = core_review.review(cfg)
+    print(f"Review for {report['date']}. This only reports: nothing was changed.\n")
+    print_table(report["companies"], ["company", "tier", "status", "matches_recent", "matches_total",
+                                      "last_match_date", "days_without_match", "flag_quiet"])
+    if report["quiet"]:
+        print("\nQuiet companies:")
+        for company in report["quiet"]:
+            print(f"  - {company['company']}: {company['suggestion']}")
+    if report["failed_last_run"]:
+        print("\nCould not be read on the last run:")
+        for failure in report["failed_last_run"]:
+            print(f"  - {failure['company']}: {failure['error']}")
+    checkpoint = report["checkpoint"]
+    print(f"\n{'WARNING: ' if checkpoint['warning'] else ''}Checkpoint: {checkpoint['message']}")
+    return 0
+
+
+def _add_tracker_flags(parser) -> None:
+    for name in _TRACKER_FIELDS:
+        choices = {"source": TRACKER_SOURCES, "status": TRACKER_STATUSES, "outreach_status": OUTREACH_STATUSES}.get(name)
+        parser.add_argument(f"--{name.replace('_', '-')}", dest=name, choices=choices)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="jobfinder", description="Freshlist: watch a fixed list of company career pages, see only the new jobs "
+                                      "that match you, and track every application. Nothing is ever sent for you.")
+    parser.add_argument("--data-dir", help="folder holding your files (default: this folder)")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p_setup = sub.add_parser("setup", help="answer a few questions to set your filters and read your resume")
+    p_setup.add_argument("--settings")
+    p_setup.add_argument("--profiles-dir")
+    p_setup.set_defaults(func=cmd_setup)
+
+    p_companies = sub.add_parser("companies", help="manage your watch-list of company career pages")
+    actions = p_companies.add_subparsers(dest="action", required=True)
+    p = actions.add_parser("add", help="add a company; the platform is detected from the link")
+    p.add_argument("url")
+    p.add_argument("--name", default="")
+    p.add_argument("--tier", default="watch", choices=TIERS)
+    p.add_argument("--notes", default="")
+    p = actions.add_parser("list", help="list your companies")
+    p.add_argument("--tier", default="", choices=("",) + TIERS)
+    p.add_argument("--status", default="", choices=("",) + COMPANY_STATUSES)
+    p = actions.add_parser("set-tier", help="set a company's tier")
+    p.add_argument("company")
+    p.add_argument("value", choices=TIERS)
+    p = actions.add_parser("set-status", help="set a company's status; only active ones are checked on a run")
+    p.add_argument("company")
+    p.add_argument("value", choices=COMPANY_STATUSES)
+    p = actions.add_parser("import", help="add many companies from a plain CSV")
+    p.add_argument("file")
+    actions.add_parser("migrate", help="convert an older companies.csv to the new columns, keeping a backup")
+    for action in actions.choices.values():
+        action.add_argument("--companies")
+        action.add_argument("--settings")
+    p_companies.set_defaults(func=cmd_companies)
+
+    p_run = sub.add_parser("run", help="check your watch-list and show only new matching jobs")
+    p_run.add_argument("--profiles", nargs="*", help="profile files; default: every profile in the profiles folder")
+    p_run.add_argument("--profiles-dir")
+    p_run.add_argument("--companies")
+    p_run.add_argument("--settings")
+    p_run.add_argument("--state", help="file that remembers jobs already shown")
+    p_run.add_argument("--inbox", help="folder of saved job-alert emails (.eml)")
+    p_run.add_argument("--cache", help="folder for today's copy of the remote-job feeds")
+    p_run.add_argument("--out-dir")
+    p_run.add_argument("--starter", action="store_true", help="optional: also read the built-in starter companies")
+    p_run.add_argument("--remote-boards", action="store_true", help="optional: also read the Himalayas and Remote OK feeds")
+    p_run.add_argument("--alert-emails", action="store_true", help="optional: also read saved LinkedIn alert emails")
+    p_run.set_defaults(func=cmd_run)
+
+    p_tracker = sub.add_parser("tracker", help="log and follow up every application, from any source")
+    actions = p_tracker.add_subparsers(dest="action", required=True)
+    p = actions.add_parser("add", help="add an entry, or a match from the last run with --from-run")
+    p.add_argument("--from-run", type=int, help="the match's number in the last run")
+    _add_tracker_flags(p)
+    p = actions.add_parser("update", help="change an entry; an empty value clears a field")
+    p.add_argument("id")
+    _add_tracker_flags(p)
+    p = actions.add_parser("list", help="list entries")
+    p.add_argument("--status", default="", choices=("",) + TRACKER_STATUSES)
+    actions.add_parser("due", help="applications whose follow-up date has arrived")
+    p = actions.add_parser("export", help="write the tracker to an Excel .xlsx file")
+    p.add_argument("--out", help="file to write; default: tracker.xlsx in the output folder")
+    p.add_argument("--status", default="", choices=("",) + TRACKER_STATUSES)
+    for action in actions.choices.values():
+        action.add_argument("--settings")
+    p_tracker.set_defaults(func=cmd_tracker)
+
+    p_today = sub.add_parser("today", help="today's checklist for the optional two-day rotation")
+    p_today.add_argument("--day", type=str.upper, choices=("A", "B"), help="use this day instead of the date's")
+    p_today.add_argument("--settings")
+    p_today.set_defaults(func=cmd_today)
+
+    p_review = sub.add_parser("review", help="weekly report: matches per company, quiet companies, the checkpoint")
+    p_review.add_argument("--settings")
+    p_review.set_defaults(func=cmd_review)
+
+    p_demo = sub.add_parser("demo", help="try the filter on built-in fake jobs (no internet)")
+    p_demo.add_argument("--profiles", nargs="*", help="profile files; default: every profile in the profiles folder")
+    p_demo.add_argument("--profiles-dir")
+    p_demo.add_argument("--settings")
+    p_demo.add_argument("--out-dir")
+    p_demo.set_defaults(func=cmd_demo)
+
+    p_add = sub.add_parser("add", help="add companies to your watch-list from job links or a saved search page")
+    p_add.add_argument("links", nargs="+", help="job or careers links, or a file (for example a saved web page)")
+    p_add.add_argument("--companies")
+    p_add.add_argument("--settings")
+    p_add.add_argument("--all", action="store_true", help="also add companies with no jobs in your cities")
+    p_add.add_argument("--yes", action="store_true", help="add without asking")
+    p_add.set_defaults(func=cmd_add)
+
+    p_disc = sub.add_parser("discover", help="optional, off by default: find companies from Y Combinator's list")
+    p_disc.add_argument("source", choices=["yc"])
+    p_disc.add_argument("--enable", action="store_true", help="turn this optional source on for this command")
+    p_disc.add_argument("--remote", action="store_true", help="also YC companies that hire remotely (slower)")
+    p_disc.add_argument("--limit", type=int, default=0, help="check at most this many companies")
+    p_disc.add_argument("--companies")
+    p_disc.add_argument("--settings")
+    p_disc.add_argument("--all", action="store_true", help="also add companies with no jobs in India")
+    p_disc.add_argument("--yes", action="store_true", help="add without asking")
+    p_disc.set_defaults(func=cmd_discover)
 
     p_profile = sub.add_parser("profile", help="read a resume and write a profile of suggested skills and titles")
     p_profile.add_argument("resume")
     p_profile.add_argument("--name", required=True, help="short name for this profile, e.g. pm or seo")
     p_profile.add_argument("--out-dir", default="profiles")
     p_profile.set_defaults(func=cmd_profile)
+    return parser
 
-    p_add = sub.add_parser("add", help="add companies from job links or a saved page of search results")
-    p_add.add_argument("links", nargs="+", help="job or careers links, or a file (for example a saved web page)")
-    p_add.add_argument("--companies", default="companies.csv")
-    p_add.add_argument("--settings", default="settings.json")
-    p_add.add_argument("--all", action="store_true", help="also add companies with no jobs in your cities")
-    p_add.add_argument("--yes", action="store_true", help="add without asking")
-    p_add.set_defaults(func=cmd_add)
 
-    p_disc = sub.add_parser("discover", help="find companies to watch from Y Combinator's hiring companies")
-    p_disc.add_argument("source", choices=["yc"])
-    p_disc.add_argument("--remote", action="store_true", help="also YC companies that hire remotely (slower)")
-    p_disc.add_argument("--limit", type=int, default=0, help="check at most this many companies")
-    p_disc.add_argument("--companies", default="companies.csv")
-    p_disc.add_argument("--settings", default="settings.json")
-    p_disc.add_argument("--all", action="store_true", help="also add companies with no jobs in India")
-    p_disc.add_argument("--yes", action="store_true", help="add without asking")
-    p_disc.set_defaults(func=cmd_discover)
-
-    p_setup = sub.add_parser("setup", help="answer a few questions to set roles, location, experience and pay")
-    p_setup.add_argument("--settings", default="settings.json")
-    p_setup.add_argument("--profiles-dir", default="profiles")
-    p_setup.set_defaults(func=cmd_setup)
-
-    p_demo = sub.add_parser("demo", help="try the whole flow on built-in fake jobs (no internet)")
-    p_demo.add_argument("--profiles", nargs="*", help="profile files; default: every profile in --profiles-dir")
-    p_demo.add_argument("--profiles-dir", default="profiles")
-    p_demo.add_argument("--settings", default="settings.json")
-    p_demo.add_argument("--out-dir", default="output")
-    p_demo.set_defaults(func=cmd_demo)
-
-    p_run = sub.add_parser("run", help="fetch jobs, filter them, and write a CSV")
-    p_run.add_argument("--profiles", nargs="*", help="profile files; default: every profile in --profiles-dir")
-    p_run.add_argument("--profiles-dir", default="profiles")
-    p_run.add_argument("--companies", default="companies.csv")
-    p_run.add_argument("--settings", default="settings.json")
-    p_run.add_argument("--state", default="state.json")
-    p_run.add_argument("--inbox", default="inbox", help="folder of saved job-alert emails (.eml)")
-    p_run.add_argument("--cache", default="cache", help="folder for today's copy of the remote-job feeds")
-    p_run.add_argument("--out-dir", default="output")
-    p_run.set_defaults(func=cmd_run)
-
-    args = parser.parse_args(argv)
-    return args.func(args)
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        return args.func(args)
+    except FreshlistError as error:
+        print(f"\n{error}")
+        return 1
+    except SourceError as error:
+        print(f"\nCould not read the list: {error}")
+        return 1
 
 
 if __name__ == "__main__":

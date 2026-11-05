@@ -1,0 +1,3 @@
+id,company,role,apply_link,posted_date,source,resume_version,changes_made,how_i_would_explain_it,founder_x_handle,company_email,applied_date,outreach_status,followup_date,status,notes
+t-example1,Example Analytics,Associate Product Manager,https://jobs.lever.co/example-analytics/123,2026-01-10,freshlist,pm,Moved SQL project to the top,I used SQL weekly for that project and can walk through it,@example_founder,hello@example.com,2026-01-12,sent,2026-01-19,applied,Fake sample row
+t-example2,Sample Robotics,SEO Executive,https://job-boards.greenhouse.io/sample-robotics/jobs/456,2026-01-11,linkedin,seo,,,,,,not_started,,to_apply,Fake sample row

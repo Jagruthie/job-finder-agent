@@ -11,10 +11,12 @@ import re
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from .errors import ResumeError
 from .filters import INDIA_PLACES, parse_pay_preference
 from .pipeline import (DEFAULT_SETTINGS, clean_list, clean_locations, clean_text, is_backup, is_non_answer,
                        profile_files)
 from .resume import read_resume_text
+from .storage import write_json
 from .textutil import has_phrase, norm
 from .vocab import Vocab
 
@@ -22,6 +24,8 @@ Ask = Callable[[str], str]
 Say = Callable[[str], None]
 
 TOTAL_STEPS = 6
+_ASKED = ("preferred_locations", "remote_country", "location_mode", "max_experience_years", "freshness_days",
+          "pay_currency", "min_annual_pay", "max_annual_pay", "pay_mode")
 _TO_MODE = {"keep": "prefer", "prefer": "prefer", "remove": "require", "require": "require"}
 _FROM_MODE = {"prefer": "keep", "require": "remove"}
 
@@ -117,10 +121,8 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
     raw_ask = ask
     ask = lambda prompt: clean_text(raw_ask(prompt))   # ignore stray keystrokes such as Escape or [ ]
     path = Path(settings_path)
-    current = dict(DEFAULT_SETTINGS)
-    if path.exists():
-        current.update({k: v for k, v in json.loads(path.read_text(encoding="utf-8")).items()
-                        if not k.startswith("_")})
+    saved = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    current = {**DEFAULT_SETTINGS, **{k: v for k, v in saved.items() if not k.startswith("_")}}
     current["preferred_locations"] = clean_locations(current["preferred_locations"]) or list(
         DEFAULT_SETTINGS["preferred_locations"])
 
@@ -147,11 +149,12 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
         say(f"{TOTAL_STEPS}/{TOTAL_STEPS}  (skipped, since you set no pay range)")
 
     out = {"_note": "Edit by hand or run: python -m jobfinder setup"}
-    out.update({k: settings[k] for k in DEFAULT_SETTINGS})
+    out.update({k: v for k, v in saved.items() if not k.startswith("_")})   # anything set by hand stays
+    out.update({k: settings[k] for k in _ASKED})
     for key in ("min_annual_pay", "max_annual_pay"):
         if out[key] is not None:
             out[key] = int(round(out[key]))
-    path.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    write_json(path, out)
     say(f"\nSaved {path}.")
 
     from_resume = _ask_resumes(ask, say, Path(profiles_dir), vocab, read_resume)
@@ -209,8 +212,7 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
             continue
         profile["skills"], profile["titles"] = new_skills, new_titles
         profile["deal_breakers"], profile["priority_skills"] = new_breakers, new_priority
-        file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+        write_json(file, profile)
         say(f"  Saved {file}.")
     return out
 
@@ -237,7 +239,7 @@ def _ask_resumes(ask: Ask, say: Say, profiles_dir: Path, vocab: Vocab, read_resu
             continue
         try:
             text = read_resume(str(resume))
-        except SystemExit as error:   # unsupported type or a missing reader library
+        except ResumeError as error:   # unsupported type or a missing reader library
             say(f"  {error}")
             continue
         known, extra = vocab.extract_skills(text), vocab.resume_phrases(text)

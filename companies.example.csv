@@ -1,7 +1,5 @@
-# Copy to companies.csv and add the companies you want to watch.
-# platform: greenhouse, lever or ashby
-# board: the name in the company's careers URL, for example
-#   boards.greenhouse.io/<board>   jobs.lever.co/<board>   jobs.ashbyhq.com/<board>
-# email and x_handle are optional. Only add contacts the company already makes public.
-name,platform,board,email,x_handle
-# Example Co,greenhouse,exampleco,careers@example.com,@examplefounder
+company,careers_url,platform,tier,status,added_date,last_match_date,notes
+Example Analytics,https://jobs.lever.co/example-analytics,lever,deep,active,2026-01-05,2026-01-12,Fake sample row
+Sample Robotics,https://job-boards.greenhouse.io/sample-robotics,greenhouse,watch,active,2026-01-05,,Fake sample row
+Demo Payments,https://jobs.ashbyhq.com/demo-payments,ashby,watch,quiet,2026-01-05,,Fake sample row
+Placeholder Foods,https://careers.placeholder-foods.example,other,watch,active,2026-01-05,,Listed but cannot be read

@@ -1,67 +1,32 @@
 from __future__ import annotations
 
-import csv
 import json
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Tuple
 
+from .config import DEFAULT_SETTINGS
+from .errors import ProfileError
 from .filters import (NOT_STATED, SENIOR_ROLE_PHRASES, TOO_SENIOR, WITHIN, country_places, entry_level_title,
                       experience_bucket, has_excluded_word, higher_level_title, in_country, location_matches,
                       parse_annual_pay, pay_from_text, remote_elsewhere, remote_in, shift_mentioned)
 from .match import Corpus, JobTerms, Query, score
 from .models import Job
 from .sources import SourceError
-from .textutil import has_phrase, norm, parse_dt
+from .storage import read_csv, write_csv as _store_csv, write_text
+from .textutil import clean_locations, clean_text, has_phrase, norm, parse_dt   # clean_* are also used by setup
 from .vocab import Vocab
-
-DEFAULT_SETTINGS = {
-    "freshness_days": 7,
-    "max_experience_years": 1,
-    "preferred_locations": ["Remote"],   # setup asks for your own cities
-    "location_mode": "prefer",          # "prefer" ranks higher, "require" drops other places
-    "remote_country": "India",          # "Remote" in your cities means remote in this country (empty: anywhere)
-    "remote_sources": ["himalayas", "remoteok"],   # searched when "Remote" is one of your cities; [] turns them off
-    "starter_companies": True,          # also read data/companies-starter.csv (companies checked to hire in India)
-    # Deal-breakers (per profile, such as Coding): a post naming this many different terms of it is removed,
-    # and one naming at least `deal_breaker_flag` of them is kept but flagged and ranked lower.
-    "deal_breaker_remove": 4,
-    "deal_breaker_flag": 2,
-    "pay_currency": "INR",              # INR or USD; pay in another currency is never compared
-    "min_annual_pay": None,             # full yearly amount, e.g. 300000 for 3 LPA. None means no minimum
-    "max_annual_pay": None,             # optional upper end of your range. None means no maximum
-    "pay_mode": "prefer",               # "prefer" ranks outside-range jobs lower, "require" drops jobs whose stated pay is outside your range
-    "exclude_title_words": ["senior", "sr", "lead", "head", "director", "vp", "principal", "staff"],
-    # A job whose title is not one of your roles is kept when it scores at least this % of the day's best match
-    # for the track and names at least this many of your skills.
-    "match_share": 45,
-    "match_min_skills": 3,
-    "request_delay_seconds": 1.5,
-}
 
 COLUMNS = [
     "Rank", "Track", "Company", "Role", "Matched by", "Apply link", "Posted", "Date basis",
     "Experience", "Experience bucket", "Priority skills", "Deal-breaker check", "Match", "Matched skills",
     "Missing skills",
     "Location", "Location match", "Shift 10-6 mentioned", "Pay", "Pay check",
-    "Company email", "Founder X handle", "Platform",
+    "Company email", "Founder X handle", "Platform", "Job id",
 ]
 
 FetchFn = Callable[[str, str, str], List[Job]]
-
-
-def clean_text(value: str) -> str:
-    """Remove stray keystrokes (control characters such as Escape) and square brackets."""
-    return "".join(ch for ch in str(value) if ch.isprintable() and ch not in "[]").strip()
-
-
-def clean_locations(values) -> List[str]:
-    """Clean a saved city list: strip stray characters, split on commas, drop empties."""
-    cleaned: List[str] = []
-    for value in values or []:
-        cleaned.extend(part.strip() for part in clean_text(value).split(",") if part.strip())
-    return cleaned
 
 
 # Words people type at a prompt when they mean "leave it as it is". Never a real role or skill.
@@ -92,10 +57,6 @@ def is_backup(path) -> bool:
 BUCKET_LABELS = {0: "Within your range", 1: "Entry-level title (years not stated)", 2: "Not stated (review)"}
 
 
-class ProfileError(Exception):
-    """A profile cannot be used as it is."""
-
-
 def load_state(path: str) -> dict:
     file = Path(path)
     if file.exists():
@@ -107,7 +68,7 @@ def load_state(path: str) -> dict:
 
 
 def save_state(path: str, state: dict) -> None:
-    Path(path).write_text(json.dumps(state, indent=1, sort_keys=True), encoding="utf-8")
+    write_text(path, json.dumps(state, indent=1, sort_keys=True))
 
 
 def prepare_profile(profile: dict, vocab: Vocab) -> dict:
@@ -304,6 +265,7 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
             "Company email": company.get("email", ""),
             "Founder X handle": company.get("x_handle", ""),
             "Platform": job.platform,
+            "Job id": job.key,      # stays the same on every run, whatever the order or the rank
             # Best match first. A job in another city, with pay outside your range, or flagged by a deal-breaker
             # ranks a quarter lower for each, so a strong match elsewhere still beats a weak one in your city.
             "_sort": (-value * 0.75 ** ((0 if loc_ok else 1) + (1 if pay_tier == 2 else 0) + (1 if flags else 0)),
@@ -326,16 +288,10 @@ def run_pipeline(companies: List[dict], profiles: List[dict], settings: dict, vo
 
 
 def write_csv(rows: List[dict], path: str) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", newline="", encoding="utf-8-sig") as handle:
-        writer = csv.DictWriter(handle, fieldnames=COLUMNS)
-        writer.writeheader()
-        writer.writerows(rows)
+    _store_csv(path, COLUMNS, rows)
 
 
 def read_companies(path: str) -> List[dict]:
-    """companies.csv columns: name, platform, board, email, x_handle (last two optional).
-    Lines starting with # are ignored."""
-    with open(path, newline="", encoding="utf-8-sig") as handle:
-        lines = [line for line in handle if line.strip() and not line.lstrip().startswith("#")]
-    return [{k.strip(): (v or "").strip() for k, v in row.items() if k} for row in csv.DictReader(lines)]
+    """The older company list format, still used by data/companies-starter.csv: name, platform, board, email,
+    x_handle (last two optional). Lines starting with # are ignored."""
+    return read_csv(path)[1]

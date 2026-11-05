@@ -1,8 +1,8 @@
 """Greenhouse Job Board API (public, no login for GET).
 
 Docs: https://developers.greenhouse.io/job-board.html
-Note: `updated_at` is when the job was last changed, not when it was first posted,
-so an old job that a company edited can look fresh.
+`first_published` is when the job was first posted (checked on a live board, November 2026). `updated_at` changes
+whenever a company edits a job, so it is used only if `first_published` is missing.
 """
 from __future__ import annotations
 
@@ -29,6 +29,6 @@ def fetch(board: str, company: str, get_json: Callable[[str], Any]) -> List[Job]
             location=location,
             url=item.get("absolute_url", "") or "",
             description=strip_html(item.get("content", "")),
-            posted_at=parse_dt(item.get("updated_at")),
+            posted_at=parse_dt(item.get("first_published")) or parse_dt(item.get("updated_at")),
         ))
     return jobs
