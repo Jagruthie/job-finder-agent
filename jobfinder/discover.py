@@ -1,17 +1,16 @@
 """Find companies from job links: paste links (or a saved page of search results) and get back
 the companies behind them, checked against their public job lists.
 
-Location first: search the web yourself for jobs in your city (see README), then give the links here.
+Location first: search the web yourself for jobs in your city, then give the links here.
 The agent never runs web searches on its own, because search engines do not allow automated searching.
 """
 from __future__ import annotations
 
-import csv
 import re
-from pathlib import Path
 from typing import Callable, Dict, List, Tuple
 
 from .filters import INDIA_PLACES, location_matches
+from .config import PLATFORMS
 from .models import Job
 from .sources import SourceError
 from .textutil import has_phrase, norm
@@ -53,7 +52,6 @@ def check_board(platform: str, board: str, preferred: List[str],
 
 
 YC_HIRING = "https://yc-oss.github.io/api/companies/hiring.json"   # unofficial daily copy of YC's list
-PLATFORMS = ("greenhouse", "lever", "ashby")
 
 
 def yc_candidates(companies: List[Dict], places: List[str]) -> List[Dict]:
@@ -90,28 +88,3 @@ def find_board(company: Dict, check: Callable[[str, str], Dict], sleep: Callable
             if result["ok"]:
                 return {**result, "name": company.get("name") or guess}
     return {"ok": False, "name": company.get("name", "?"), "error": "no Greenhouse, Lever or Ashby board found"}
-
-
-def known_boards(path: str) -> set:
-    file = Path(path)
-    if not file.exists():
-        return set()
-    with open(file, newline="", encoding="utf-8-sig") as handle:
-        lines = [line for line in handle if line.strip() and not line.lstrip().startswith("#")]
-    return {(row.get("platform", "").strip().lower(), row.get("board", "").strip().lower())
-            for row in csv.DictReader(lines)}
-
-
-def append_companies(path: str, results: List[Dict], example: str = "companies.example.csv") -> None:
-    file = Path(path)
-    if not file.exists():
-        source = Path(example)
-        file.write_text(source.read_text(encoding="utf-8") if source.exists()
-                        else "name,platform,board,email,x_handle\n", encoding="utf-8")
-    text = file.read_text(encoding="utf-8")
-    with open(file, "a", newline="", encoding="utf-8") as handle:
-        if text and not text.endswith("\n"):
-            handle.write("\n")
-        writer = csv.writer(handle)
-        for result in results:
-            writer.writerow([result.get("name") or result["board"], result["platform"], result["board"], "", ""])

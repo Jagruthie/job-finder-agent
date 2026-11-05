@@ -1,13 +1,17 @@
 {
-  "_note": "Edit by hand or run: python -m jobfinder setup. Shift time is not a setting: a '10-6' mention only raises a job's rank.",
+  "_note": "Copy to settings.json to change a default, or run: python -m jobfinder setup. Every setting and its default is in jobfinder/config.py.",
   "freshness_days": 7,
   "max_experience_years": 1,
-  "preferred_locations": ["Hyderabad", "Remote"],
+  "preferred_locations": ["Remote"],
   "location_mode": "prefer",
-  "pay_currency": "INR",
-  "min_annual_pay": null,
-  "max_annual_pay": null,
-  "pay_mode": "prefer",
-  "exclude_title_words": ["senior", "sr", "lead", "head", "director", "vp", "principal", "staff"],
-  "request_delay_seconds": 1.5
+  "remote_country": "India",
+  "request_delay_seconds": 1.5,
+  "followup_days": 7,
+  "quiet_after_days": 14,
+  "checkpoint_days": 14,
+  "checkpoint_min_matches": 3,
+  "use_starter_companies": false,
+  "use_remote_boards": false,
+  "use_alert_emails": false,
+  "use_yc_discovery": false
 }

@@ -14,7 +14,7 @@ from typing import Any, Callable, List
 
 from ..models import Job
 
-USER_AGENT = "jobfinder-agent/0.1 (personal job search; low request volume)"
+USER_AGENT = "Freshlist/0.2 (+https://github.com/Jagruthie/job-finder-agent; personal job search; low request volume)"
 
 
 class SourceError(Exception):

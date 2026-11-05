@@ -5,21 +5,27 @@ Press Enter to keep the value shown in [brackets]. Type 'none' to clear an optio
 """
 from __future__ import annotations
 
+import difflib
 import json
 import re
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from .filters import parse_pay_preference
+from .errors import ResumeError
+from .filters import INDIA_PLACES, parse_pay_preference
 from .pipeline import (DEFAULT_SETTINGS, clean_list, clean_locations, clean_text, is_backup, is_non_answer,
                        profile_files)
 from .resume import read_resume_text
+from .storage import write_json
+from .textutil import has_phrase, norm
 from .vocab import Vocab
 
 Ask = Callable[[str], str]
 Say = Callable[[str], None]
 
 TOTAL_STEPS = 6
+_ASKED = ("preferred_locations", "remote_country", "location_mode", "max_experience_years", "freshness_days",
+          "pay_currency", "min_annual_pay", "max_annual_pay", "pay_mode")
 _TO_MODE = {"keep": "prefer", "prefer": "prefer", "remove": "require", "require": "require"}
 _FROM_MODE = {"prefer": "keep", "require": "remove"}
 
@@ -44,6 +50,21 @@ def describe_pay(currency: str, low: Optional[float], high: Optional[float]) -> 
 def _ask_list(ask: Ask, step: int, label: str, current: List[str]) -> List[str]:
     answer = ask(f"{step}/{TOTAL_STEPS}  {label} [{', '.join(current)}]: ").strip()
     return _split(answer) if answer else list(current)
+
+
+def _ask_country(ask: Ask, cities: List[str], current: str) -> str:
+    """The country you are job hunting in. Asked only when your cities are not in India (or you set another
+    country before), so for most people nothing changes. A city typed with a small slip ('Banglore') still
+    counts as Indian."""
+    places = [norm(city) for city in cities if norm(city) != "remote"]
+
+    def indian(place: str) -> bool:
+        return (any(has_phrase(place, known) for known in INDIA_PLACES)
+                or bool(difflib.get_close_matches(place, INDIA_PLACES, n=1, cutoff=0.8)))
+    if norm(current) == "india" and (not places or any(indian(place) for place in places)):
+        return current
+    answer = ask(f"      Which country are these cities in? Remote jobs must be open to it [{current or 'India'}]: ")
+    return answer.strip() or current or "India"
 
 
 def _ask_mode(ask: Ask, say: Say, step: int, label: str, current: str) -> str:
@@ -100,10 +121,8 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
     raw_ask = ask
     ask = lambda prompt: clean_text(raw_ask(prompt))   # ignore stray keystrokes such as Escape or [ ]
     path = Path(settings_path)
-    current = dict(DEFAULT_SETTINGS)
-    if path.exists():
-        current.update({k: v for k, v in json.loads(path.read_text(encoding="utf-8")).items()
-                        if not k.startswith("_")})
+    saved = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    current = {**DEFAULT_SETTINGS, **{k: v for k, v in saved.items() if not k.startswith("_")}}
     current["preferred_locations"] = clean_locations(current["preferred_locations"]) or list(
         DEFAULT_SETTINGS["preferred_locations"])
 
@@ -111,8 +130,9 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
     settings = dict(current)
     settings["preferred_locations"] = _ask_list(
         ask, 1, "Cities you prefer, comma separated", current["preferred_locations"])
+    settings["remote_country"] = _ask_country(ask, settings["preferred_locations"], current["remote_country"])
     settings["location_mode"] = _ask_mode(
-        ask, say, 2, f"Jobs in other cities{' of ' + current['remote_country'] if current['remote_country'] else ''}: "
+        ask, say, 2, f"Jobs in other cities{' of ' + settings['remote_country'] if settings['remote_country'] else ''}: "
         "keep them (ranked lower) or remove them?", current["location_mode"])
     settings["max_experience_years"] = _ask_int(
         ask, say, 3, "Most years of experience a job may ask for", current["max_experience_years"])
@@ -129,11 +149,12 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
         say(f"{TOTAL_STEPS}/{TOTAL_STEPS}  (skipped, since you set no pay range)")
 
     out = {"_note": "Edit by hand or run: python -m jobfinder setup"}
-    out.update({k: settings[k] for k in DEFAULT_SETTINGS})
+    out.update({k: v for k, v in saved.items() if not k.startswith("_")})   # anything set by hand stays
+    out.update({k: settings[k] for k in _ASKED})
     for key in ("min_annual_pay", "max_annual_pay"):
         if out[key] is not None:
             out[key] = int(round(out[key]))
-    path.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    write_json(path, out)
     say(f"\nSaved {path}.")
 
     from_resume = _ask_resumes(ask, say, Path(profiles_dir), vocab, read_resume)
@@ -191,8 +212,7 @@ def run_setup(settings_path: str, profiles_dir: str, vocab: Vocab,
             continue
         profile["skills"], profile["titles"] = new_skills, new_titles
         profile["deal_breakers"], profile["priority_skills"] = new_breakers, new_priority
-        file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+        write_json(file, profile)
         say(f"  Saved {file}.")
     return out
 
@@ -219,7 +239,7 @@ def _ask_resumes(ask: Ask, say: Say, profiles_dir: Path, vocab: Vocab, read_resu
             continue
         try:
             text = read_resume(str(resume))
-        except SystemExit as error:   # unsupported type or a missing reader library
+        except ResumeError as error:   # unsupported type or a missing reader library
             say(f"  {error}")
             continue
         known, extra = vocab.extract_skills(text), vocab.resume_phrases(text)
@@ -233,7 +253,12 @@ def _ask_resumes(ask: Ask, say: Say, profiles_dir: Path, vocab: Vocab, read_resu
         file = profiles_dir / f"{name}.json"
         if file.exists():
             say(f"  Profile '{name}' already exists. You will confirm the skills from this resume before it changes.")
-        found[file] = (skills, vocab.resume_titles(text))
+        roles = vocab.resume_titles(text)
+        suggested = vocab.suggest_roles(roles, skills)
+        added = [role for role in suggested if role not in roles]
+        if added:
+            say(f"  Also suggesting roles that fit your skills or are the next step up: {', '.join(added)}.")
+        found[file] = (skills, suggested)
         read[resume.resolve()] = name
 
 

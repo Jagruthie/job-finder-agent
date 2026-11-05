@@ -29,10 +29,10 @@ def iso(days_ago):
 
 GREENHOUSE = {"jobs": [
     {"id": 1, "title": "Associate Product Manager", "updated_at": iso(2),
-     "location": {"name": "Hyderabad"}, "absolute_url": "https://boards.greenhouse.io/acme/jobs/1",
+     "location": {"name": "Jaipur"}, "absolute_url": "https://boards.greenhouse.io/acme/jobs/1",
      "content": "&lt;p&gt;0-1 years of experience. You will use SQL, Agile and user research. Stipend: Rs. 25,000 per month&lt;/p&gt;"},
     {"id": 2, "title": "Associate Product Manager", "updated_at": iso(12),
-     "location": {"name": "Hyderabad"}, "absolute_url": "https://boards.greenhouse.io/acme/jobs/2",
+     "location": {"name": "Jaipur"}, "absolute_url": "https://boards.greenhouse.io/acme/jobs/2",
      "content": "&lt;p&gt;Fresh grads welcome.&lt;/p&gt;"},
     {"id": 3, "title": "Senior Product Manager", "updated_at": iso(1),
      "location": {"name": "Bengaluru"}, "absolute_url": "https://boards.greenhouse.io/acme/jobs/3",
@@ -44,13 +44,13 @@ GREENHOUSE = {"jobs": [
      "location": {"name": "Remote"}, "absolute_url": "https://boards.greenhouse.io/acme/jobs/5",
      "content": "&lt;p&gt;Work with the founder on strategy and operations.&lt;/p&gt;"},
     {"id": 6, "title": "Office Chef", "updated_at": iso(1),
-     "location": {"name": "Hyderabad"}, "absolute_url": "https://boards.greenhouse.io/acme/jobs/6", "content": ""},
+     "location": {"name": "Jaipur"}, "absolute_url": "https://boards.greenhouse.io/acme/jobs/6", "content": ""},
 ]}
 
 LEVER = [
     {"id": "abc", "text": "SEO Specialist", "hostedUrl": "https://jobs.lever.co/beta/abc",
      "applyUrl": "https://jobs.lever.co/beta/abc/apply", "createdAt": int((NOW - timedelta(days=1)).timestamp() * 1000),
-     "categories": {"location": "Hyderabad", "commitment": "Full-time"}, "workplaceType": "onsite",
+     "categories": {"location": "Jaipur", "commitment": "Full-time"}, "workplaceType": "onsite",
      "descriptionPlain": "Freshers can apply. Keyword research, SEO, Ahrefs. Shift 10 am to 6 pm.",
      "lists": [{"text": "Requirements", "content": "<li>Google Search Console</li>"}],
      "additionalPlain": "", "salaryRange": {"min": 300000, "max": 500000, "currency": "INR", "interval": "per-year-salary"}},
@@ -59,7 +59,7 @@ LEVER = [
 ]
 
 ASHBY = {"jobs": [
-    {"id": "x1", "title": "Business Operations Associate", "location": "Hyderabad", "isRemote": False,
+    {"id": "x1", "title": "Business Operations Associate", "location": "Jaipur", "isRemote": False,
      "publishedAt": iso(4), "jobUrl": "https://jobs.ashbyhq.com/gamma/x1", "isListed": True,
      "descriptionHtml": "<p>Entry level. Excel, project management, data analysis.</p>",
      "compensation": {"scrapeableCompensationSalarySummary": "INR 6L - 9L"}},
@@ -176,8 +176,8 @@ class FilterTests(unittest.TestCase):
         self.assertFalse(filters.shift_mentioned("9 to 5"))
         self.assertIn("25,000", filters.pay_from_text("Stipend: Rs. 25,000 per month"))
         self.assertEqual(filters.pay_from_text("Great team"), "")
-        self.assertTrue(filters.location_matches("Hyderabad, Telangana", ["hyderabad"]))
-        self.assertFalse(filters.location_matches("Pune", ["hyderabad"]))
+        self.assertTrue(filters.location_matches("Jaipur, Rajasthan", ["jaipur"]))
+        self.assertFalse(filters.location_matches("Pune", ["jaipur"]))
 
 
 class VocabTests(unittest.TestCase):
@@ -234,7 +234,8 @@ class SourceTests(unittest.TestCase):
 class PipelineTests(unittest.TestCase):
     def run_once(self, state=None, now=NOW, settings=None, profiles=None):
         state = state if state is not None else {"first_seen": {}, "dropped": {}}
-        rows, stats, failures = run_pipeline(COMPANIES, profiles or [PM, SEO], settings or {}, VOCAB,
+        settings = settings or {"preferred_locations": ["Jaipur", "Remote"]}
+        rows, stats, failures = run_pipeline(COMPANIES, profiles or [PM, SEO], settings, VOCAB,
                                              state, fake_fetch, now=now)
         return rows, stats, failures, state
 
@@ -377,7 +378,7 @@ class SetupTests(unittest.TestCase):
                 json.dump({"name": "example", "skills": [], "titles": ["Keep Me"]}, handle)
             settings_path = os.path.join(tmp, "settings.json")
             answers = [
-                "Hyderabad, Pune",              # 1 cities
+                "Jaipur, Pune",              # 1 cities
                 "remove",                       # 2 other cities
                 "2",                            # 3 experience
                 "5",                            # 4 freshness
@@ -392,7 +393,7 @@ class SetupTests(unittest.TestCase):
             run_setup(settings_path, profiles, VOCAB, ask=self.scripted(answers), say=said.append)
             with open(settings_path) as handle:
                 saved = json.load(handle)
-            self.assertEqual(saved["preferred_locations"], ["Hyderabad", "Pune"])
+            self.assertEqual(saved["preferred_locations"], ["Jaipur", "Pune"])
             self.assertEqual(saved["location_mode"], "require")
             self.assertEqual(saved["max_experience_years"], 2)
             self.assertEqual(saved["freshness_days"], 5)
@@ -410,18 +411,18 @@ class SetupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "settings.json")
             with open(path, "w") as handle:
-                json.dump({"preferred_locations": ["[hyderabad, remote]", "\x1b"]}, handle)
+                json.dump({"preferred_locations": ["[jaipur, remote]", "\x1b"]}, handle)
             said = []
             asked = []
             def ask(prompt):
                 asked.append(prompt)
                 return "\x1b" if len(asked) == 1 else ""          # an Escape keypress, then Enter
             run_setup(path, os.path.join(tmp, "nope"), VOCAB, ask=ask, say=said.append)
-            self.assertIn("[hyderabad, remote]", asked[0])          # shown cleaned, one bracket pair only
+            self.assertIn("[jaipur, remote]", asked[0])          # shown cleaned, one bracket pair only
             self.assertNotIn("[[", asked[0])
             with open(path) as handle:
                 saved = json.load(handle)
-            self.assertEqual(saved["preferred_locations"], ["hyderabad", "remote"])
+            self.assertEqual(saved["preferred_locations"], ["jaipur", "remote"])
 
     def test_empty_roles_cannot_be_skipped_when_no_suggestion_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -472,7 +473,7 @@ class SetupTests(unittest.TestCase):
                 saved = json.load(handle)
             self.assertIsNone(saved["min_annual_pay"])
             self.assertEqual(saved["max_experience_years"], 1)
-            self.assertEqual(saved["preferred_locations"], ["Hyderabad", "Remote"])
+            self.assertEqual(saved["preferred_locations"], ["Remote"])   # no one else's city by default
 
     def test_bad_answers_are_asked_again_with_a_message(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -717,9 +718,9 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_check_board_counts_jobs_in_your_cities(self):
         from jobfinder.discover import check_board
-        result = check_board("lever", "beta", ["Hyderabad"], fake_fetch)
+        result = check_board("lever", "beta", ["Jaipur"], fake_fetch)
         self.assertEqual((result["jobs"], result["in_your_cities"]), (2, 1))
-        self.assertFalse(check_board("lever", "nope", ["Hyderabad"], fake_fetch)["ok"])
+        self.assertFalse(check_board("lever", "nope", ["Jaipur"], fake_fetch)["ok"])
 
     def test_add_command_appends_only_companies_with_jobs_in_your_cities(self):
         import contextlib
@@ -729,17 +730,19 @@ class DiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             companies = os.path.join(tmp, "companies.csv")
             with open(companies, "w") as handle:
-                handle.write("# comment\nname,platform,board,email,x_handle\nAcme,greenhouse,acme,,\n")
+                handle.write("company,careers_url,platform,tier,status,added_date,last_match_date,notes\n"
+                             "Acme,https://job-boards.greenhouse.io/acme,greenhouse,watch,active,2026-01-01,,\n")
             settings = os.path.join(tmp, "settings.json")
             with open(settings, "w") as handle:
-                json.dump({"preferred_locations": ["Hyderabad"], "request_delay_seconds": 0}, handle)
+                json.dump({"preferred_locations": ["Jaipur"], "request_delay_seconds": 0}, handle)
             links = ("https://boards.greenhouse.io/acme/jobs/1 https://jobs.lever.co/beta/abc "
                      "https://jobs.ashbyhq.com/gamma/x1 https://jobs.lever.co/doesnotexist/1")
             out = io.StringIO()
-            with mock.patch.object(cli, "fetch_board", fake_fetch), contextlib.redirect_stdout(out):
+            with mock.patch("jobfinder.core.discovery.fetch_board", fake_fetch), contextlib.redirect_stdout(out):
                 code = cli.main(["add", links, "--companies", companies, "--settings", settings, "--yes"])
             self.assertEqual(code, 0)
-            boards = {(r["platform"], r["board"]) for r in read_companies(companies)}
+            from jobfinder.core.watchlist import board_of
+            boards = {(r["platform"], board_of(r)) for r in read_companies(companies)}
             self.assertEqual(boards, {("greenhouse", "acme"), ("lever", "beta"), ("ashby", "gamma")})
             self.assertIn("Already in", out.getvalue())                    # acme was not added twice
             self.assertIn("could not read", out.getvalue())                # the wrong board is reported
@@ -767,14 +770,14 @@ class SeniorWordTests(unittest.TestCase):
         self.assertTrue(filters.has_excluded_word("Chief of Staff", words))          # no role given: old behaviour
 
     def test_people_manager_and_quota_sales_titles_are_senior_below_three_years(self):
-        jobs = [Job("demo", "x", "Acme", str(i), title, "Hyderabad", f"https://e/{i}",
+        jobs = [Job("demo", "x", "Acme", str(i), title, "Jaipur", f"https://e/{i}",
                     "Product management, agile, user research, metrics and strategy.", NOW)
                 for i, title in enumerate(["Engineering Manager, Integrations", "Customer Service - Team Manager",
                                            "Strategic Account Executive", "Associate Product Manager"])]
 
         def run(years, profile=PM):
             rows, stats, _ = run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], [profile],
-                                          {"preferred_locations": ["Hyderabad"], "max_experience_years": years},
+                                          {"preferred_locations": ["Jaipur"], "max_experience_years": years},
                                           VOCAB, {"first_seen": {}, "dropped": {}}, lambda p, b, n: jobs, now=NOW)
             return sorted(r["Role"] for r in rows), stats["senior_title"]
         self.assertEqual(run(1), (["Associate Product Manager"], 3))
@@ -785,10 +788,10 @@ class SeniorWordTests(unittest.TestCase):
 
 class RemoteLocationTests(unittest.TestCase):
     def test_remote_means_remote_in_your_country(self):
-        wanted = ["Hyderabad", "Remote"]
+        wanted = ["Jaipur", "Remote"]
         for location, expected in [("Remote, United States", False), ("Tokyo, Japan (Remote)", False),
                                    ("Remote", True), ("Remote - India", True), ("Bengaluru (Remote)", True),
-                                   ("Hyderabad", True), ("Pune", False)]:
+                                   ("Jaipur", True), ("Pune", False)]:
             self.assertEqual(filters.location_matches(location, wanted), expected, location)
         self.assertTrue(filters.location_matches("Remote, United States", wanted, remote_country=""))
 
@@ -846,7 +849,7 @@ class EntryLevelTests(unittest.TestCase):
 
     def test_entry_title_ranks_between_stated_and_not_stated(self):
         def job(job_id, title, text):
-            return Job("demo", "x", "X", job_id, title, "Hyderabad", f"https://e/{job_id}", text, NOW)
+            return Job("demo", "x", "X", job_id, title, "Jaipur", f"https://e/{job_id}", text, NOW)
         jobs = [job("1", "Business Analyst", "Excel and SQL."),                  # nothing stated
                 job("2", "Associate Business Analyst", "Excel and SQL."),        # entry title, years not stated
                 job("3", "Business Analyst", "0-1 years of experience."),        # years stated
@@ -865,7 +868,7 @@ class EntryLevelTests(unittest.TestCase):
 def fake_linkedin_alert(path, sent="Wed, 21 Oct 2026 04:23:35 +0000", jobs=None, sender="LinkedIn <jobs-noreply@linkedin.com>"):
     """Writes a FAKE LinkedIn alert email with the same layout as a real one. All names are invented."""
     from email.message import EmailMessage
-    jobs = jobs or [("Founder's Office", "Kestrel Labs (fake)", "Hyderabad, Telangana, India", "1001", True),
+    jobs = jobs or [("Founder's Office", "Kestrel Labs (fake)", "Jaipur, Rajasthan, India", "1001", True),
                     ("Associate Product Manager", "Orbit Fintech (fake)", "India", "1002", False),
                     ("SEO Executive", "Inkwell Media (fake)", "Remote", "1003", True)]
     token = "&otpToken=FAKE0TOKEN&trackingId=abc"
@@ -893,7 +896,7 @@ class AlertInboxTests(unittest.TestCase):
             jobs, notes = read_alerts(tmp)
         self.assertEqual(notes, [])
         self.assertEqual([(j.title, j.company, j.location) for j in jobs],
-                         [("Founder's Office", "Kestrel Labs (fake)", "Hyderabad, Telangana, India"),
+                         [("Founder's Office", "Kestrel Labs (fake)", "Jaipur, Rajasthan, India"),
                           ("Associate Product Manager", "Orbit Fintech (fake)", "India"),
                           ("SEO Executive", "Inkwell Media (fake)", "Remote")])
         self.assertEqual(jobs[0].url, "https://www.linkedin.com/jobs/view/1001/")
@@ -930,7 +933,7 @@ class AlertInboxTests(unittest.TestCase):
                     json.dump(profile, handle)
             settings = os.path.join(tmp, "settings.json")
             with open(settings, "w") as handle:
-                json.dump({"remote_sources": [], "starter_companies": False}, handle)   # tests never use the internet
+                json.dump({"use_alert_emails": True}, handle)   # the other optional sources stay off: tests never use the internet
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 code = main(["run", "--profiles-dir", folder, "--inbox", inbox,
@@ -958,19 +961,19 @@ class AlertInboxTests(unittest.TestCase):
 class SkillsFirstTests(unittest.TestCase):
     """Jobs can be kept for your skills even when their title is not on your list."""
 
-    def job(self, job_id, title, text, location="Hyderabad", company="Acme"):
+    def job(self, job_id, title, text, location="Jaipur", company="Acme"):
         return Job("demo", "x", company, job_id, title, location, f"https://e/{job_id}", text, NOW)
 
     def run_jobs(self, jobs, profiles, **settings):
         return run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], profiles,
-                            {"preferred_locations": ["Hyderabad", "Remote"], **settings}, VOCAB,
+                            {"preferred_locations": ["Jaipur", "Remote"], **settings}, VOCAB,
                             {"first_seen": {}, "dropped": {}}, lambda p, b, n: jobs, now=NOW)
 
     def test_resume_phrases_take_skill_lists_but_not_personal_details(self):
-        text = ("Priya Sharma | Hyderabad | priya@example.com | +91 98765 43210\n"
+        text = ("Priya Sharma | Jaipur | priya@example.com | +91 98765 43210\n"
                 "Skills: Java, Spring Boot, AWS, Docker, Kubernetes, Git, C++, Go\n"
                 "Core skills - Mentoring | Vendor Management | Event Planning\n"
-                "Education: B.Tech, JNTU Hyderabad, 2024\n"
+                "Education: B.Tech, JNTU Jaipur, 2024\n"
                 "I built a payment service in Java, deployed on AWS, with tests.")
         # Java, AWS, Docker and Kubernetes are built-in skills, so they are found anyway and not repeated here.
         self.assertEqual(VOCAB.resume_phrases(text), ["Spring Boot", "Mentoring", "Vendor Management", "Event Planning"])
@@ -1118,14 +1121,14 @@ class CompanyListTests(unittest.TestCase):
                      {"name": "Orbit", "slug": "orbit", "website": "https://orbit.com",
                       "all_locations": "San Francisco, CA, USA", "regions": ["United States of America", "Remote"]},
                      {"name": "Dormant", "slug": "dormant", "all_locations": "Pune, MH, India", "isHiring": False}]
-        self.assertEqual([c["name"] for c in yc_candidates(companies, ["Hyderabad", "india"])], ["Kite Labs"])
+        self.assertEqual([c["name"] for c in yc_candidates(companies, ["Jaipur", "india"])], ["Kite Labs"])
         self.assertEqual([c["name"] for c in yc_candidates(companies, ["india", "remote"])], ["Kite Labs", "Orbit"])
         self.assertEqual(board_guesses(companies[0]), ["kite-labs", "kitelabs"])
 
     def test_find_board_tries_each_name_on_each_platform(self):
         from jobfinder.discover import check_board, find_board
         company = {"name": "Beta Inc", "slug": "beta-inc", "website": "https://beta.io"}
-        result = find_board(company, lambda platform, board: check_board(platform, board, ["Hyderabad"], fake_fetch),
+        result = find_board(company, lambda platform, board: check_board(platform, board, ["Jaipur"], fake_fetch),
                             lambda s: None)
         self.assertEqual((result["platform"], result["board"], result["name"]), ("lever", "beta", "Beta Inc"))
         missing = find_board({"name": "Nope", "slug": "nope"}, lambda p, b: {"ok": False}, lambda s: None)
@@ -1147,10 +1150,10 @@ class PriorityAndDealBreakerTests(unittest.TestCase):
           "priority_skills": ["Product Management", "Roadmapping", "User Research", "Product Specs", "SQL"]}
 
     def job(self, job_id, title, text):
-        return Job("demo", "x", "Acme", job_id, title, "Hyderabad", f"https://e/{job_id}", text, NOW)
+        return Job("demo", "x", "Acme", job_id, title, "Jaipur", f"https://e/{job_id}", text, NOW)
 
     def run_jobs(self, jobs, profiles):
-        return run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], profiles, {"preferred_locations": ["Hyderabad"]},
+        return run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], profiles, {"preferred_locations": ["Jaipur"]},
                             VOCAB, {"first_seen": {}, "dropped": {}}, lambda p, b, n: jobs, now=NOW)
 
     def test_skills_only_match_must_name_a_priority_skill(self):
@@ -1263,22 +1266,71 @@ def answer_by_prompt(answers, asked=None):
     return ask
 
 
+class NewcomerTests(unittest.TestCase):
+    """From a trial as a new user: a fresh marketing graduate, and someone job hunting in London."""
+    RESUME = ("Priya Test | Bengaluru | priya@example.com\n"
+              "EXPERIENCE\n"
+              "Marketing Intern | Acme Foods | Jan 2026 - Jun 2026\n"
+              "Wrote blog posts, ran Instagram, did keyword research.\n"
+              "SKILLS\n"
+              "Tools: Canva, Google Analytics, WordPress, Semrush, Excel\n"
+              "LinkedIn (1,000+ followers): weekly posts, not polished takeaways, short notes.\n")
+
+    def test_an_intern_title_also_offers_the_next_step_and_roles_that_fit_the_skills(self):
+        roles = VOCAB.suggest_roles(["Marketing Intern"], ["Content Strategy", "Content Writing", "Keyword Research",
+                                                            "Semrush", "Social Media"])
+        self.assertEqual(roles[:3], ["Marketing Intern", "Marketing Associate", "Marketing Executive"])
+        self.assertIn("SEO Executive", roles)
+        self.assertIn("Content Strategist", roles)
+        self.assertEqual(VOCAB.suggest_roles(["Data Engineer"], []), ["Data Engineer"])
+
+    def test_sentence_pieces_are_not_skills(self):
+        found = VOCAB.resume_phrases(self.RESUME)
+        self.assertIn("Canva", found)
+        for junk in ("ran Instagram", "000+ followers", "not polished takeaways", "Tools: Canva"):
+            self.assertNotIn(junk, found)
+
+    def test_setup_asks_the_country_only_for_cities_outside_india(self):
+        asked = []
+        for cities, country, expected in (("London, Remote", "United Kingdom", "United Kingdom"),
+                                          ("Banglore, Remote", "", "India")):
+            with tempfile.TemporaryDirectory() as tmp:   # a new person each time
+                run_setup(os.path.join(tmp, "settings.json"), os.path.join(tmp, "profiles"), VOCAB,
+                          say=lambda line: None, ask=answer_by_prompt(
+                              [("Cities you prefer", cities), ("Which country", country), ("Pay [", "none")], asked))
+                with open(os.path.join(tmp, "settings.json")) as handle:
+                    self.assertEqual(json.load(handle)["remote_country"], expected, cities)
+        self.assertEqual(sum("Which country" in prompt for prompt in asked), 1)   # not asked for Banglore
+
+    def test_jobs_in_your_own_city_abroad_are_kept(self):
+        jobs = [Job("demo", "x", "Acme", str(i), "Content Strategist", place, f"https://e/{i}",
+                    "Content strategy, SEO and writing. 0-1 years of experience.", NOW)
+                for i, place in enumerate(["London, UK", "Manchester, United Kingdom", "Remote, UK", "Austin, TX, USA",
+                                           "Bengaluru, India"])]
+        profile = {"name": "c", "skills": ["Content Strategy", "SEO", "Writing"], "titles": ["Content Strategist"]}
+        rows, _, _ = run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], [profile],
+                                  {"preferred_locations": ["London", "Remote"], "remote_country": "United Kingdom"},
+                                  VOCAB, {"first_seen": {}, "dropped": {}}, lambda p, b, n: jobs, now=NOW)
+        self.assertEqual(sorted(r["Location"] for r in rows),
+                         ["London, UK", "Manchester, United Kingdom", "Remote, UK"])
+
+
 class DataEngineerTrialTests(unittest.TestCase):
     """From a real trial: a data engineer found no jobs. Each test is one cause, fixed."""
-    RESUME = ("Kamal P | Hyderabad | kamal@example.com\n"
+    RESUME = ("Alex Example | Jaipur | alex@example.com\n"
               "Data Engineer | Acme Analytics | 2022 - Present\n"
               "Built ETL/ELT pipelines on AWS and modelled the warehouse.\n"
               "Skills: SQL, Python, PySpark, Airflow, dbt, Bash, Spring Boot\n"
               "Cloud: AWS (S3, RDS, Redshift, EC2), Glue, Lambda, VPC\n")
 
-    def job(self, job_id, title, text, location="Hyderabad", days=1):
+    def job(self, job_id, title, text, location="Jaipur", days=1):
         return Job("demo", "x", "Acme", job_id, title, location, f"https://e/{job_id}", text,
                    None if days is None else NOW - timedelta(days=days))
 
     def run_jobs(self, jobs, profiles, state=None, now=NOW, **settings):
         state = state if state is not None else {"first_seen": {}, "dropped": {}}
         rows, stats, _ = run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], profiles,
-                                      {"preferred_locations": ["Hyderabad"], "max_experience_years": 4, **settings},
+                                      {"preferred_locations": ["Jaipur"], "max_experience_years": 4, **settings},
                                       VOCAB, state, lambda p, b, n: jobs, now=now)
         return rows, stats, state
 
@@ -1399,7 +1451,7 @@ class DataEngineerTrialTests(unittest.TestCase):
 
 class OtherFieldsTests(unittest.TestCase):
     """A resume from a field other than tech gets roles from its own field, never a wrong one."""
-    HR_RESUME = ("Ananya Rao | Hyderabad | ananya@example.com\n"
+    HR_RESUME = ("Ananya Rao | Jaipur | ananya@example.com\n"
                  "HR Executive | Brightpath IT Services | 2023 - Present\n"
                  "Managed end-to-end recruitment, onboarding of new joiners and monthly payroll inputs in Keka.\n"
                  "Core: Talent Acquisition, Onboarding, Employee Engagement, Payroll, HR Operations, Employee Relations\n"
@@ -1418,7 +1470,7 @@ class OtherFieldsTests(unittest.TestCase):
 class SimilarityMatchTests(unittest.TestCase):
     """Each day's jobs are ranked against the roles and skills you saved from your resume."""
 
-    def job(self, job_id, title, text, location="Hyderabad"):
+    def job(self, job_id, title, text, location="Jaipur"):
         return Job("demo", "x", "Acme", job_id, title, location, f"https://e/{job_id}", text, NOW)
 
     def filler(self, count=25):
@@ -1429,7 +1481,7 @@ class SimilarityMatchTests(unittest.TestCase):
 
     def run_jobs(self, jobs, profiles, **settings):
         return run_pipeline([{"name": "X", "platform": "demo", "board": "x"}], profiles,
-                            {"preferred_locations": ["Hyderabad"], "max_experience_years": 3, **settings}, VOCAB,
+                            {"preferred_locations": ["Jaipur"], "max_experience_years": 3, **settings}, VOCAB,
                             {"first_seen": {}, "dropped": {}}, lambda p, b, n: jobs, now=NOW)
 
     def test_any_field_works_with_no_built_in_knowledge_of_it(self):
@@ -1477,7 +1529,7 @@ class SimilarityMatchTests(unittest.TestCase):
     def test_a_strong_match_elsewhere_beats_a_weak_one_in_your_city(self):
         analyst = {"name": "da", "titles": ["Data Analyst"], "skills": ["SQL", "Power BI", "Tableau", "Excel"]}
         rows, _, _ = self.run_jobs(self.filler() + [
-            self.job("1", "Data Analyst", "Excel.", location="Hyderabad"),
+            self.job("1", "Data Analyst", "Excel.", location="Jaipur"),
             self.job("2", "Data Analyst", "SQL, Power BI and Tableau dashboards, Excel models.", location="Pune")],
             [analyst])
         self.assertEqual([r["Apply link"][-1] for r in rows], ["2", "1"])

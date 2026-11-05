@@ -31,12 +31,12 @@ def demo_data(now: datetime) -> Tuple[List[dict], Dict[str, List[Job]]]:
 
     jobs = {
         "northwind": [
-            job("northwind", companies[0]["name"], "101", "Associate Product Manager", "Hyderabad", 2,
+            job("northwind", companies[0]["name"], "101", "Associate Product Manager", "Jaipur", 2,
                 "0-1 years of experience. You will own a roadmap, run user research, work in agile sprints, "
                 "write specs and track metrics with SQL. Stipend: Rs. 25,000 per month."),
             job("northwind", companies[0]["name"], "102", "Product Manager, AI", "Bengaluru", 1,
                 "3+ years of experience in product management. Roadmap, strategy, stakeholders."),
-            job("northwind", companies[0]["name"], "103", "Senior Product Manager", "Hyderabad", 1,
+            job("northwind", companies[0]["name"], "103", "Senior Product Manager", "Jaipur", 1,
                 "Lead the product team. Roadmap, strategy and metrics."),
             job("northwind", companies[0]["name"], "104", "Associate Product Manager", "Pune", 11,
                 "Freshers welcome. Roadmap and user research."),
@@ -45,27 +45,27 @@ def demo_data(now: datetime) -> Tuple[List[dict], Dict[str, List[Job]]]:
             job("kite", companies[1]["name"], "201", "Founder's Office Associate", "Remote", 3,
                 "Work directly with the founder on strategy, operations and zero to one projects. "
                 "Stakeholder communication and presentations."),
-            job("kite", companies[1]["name"], "202", "Product Analyst", "Hyderabad", 1,
+            job("kite", companies[1]["name"], "202", "Product Analyst", "Jaipur", 1,
                 "Fresher or 0-1 years of experience. SQL, Excel and product analytics. Shift 10 am to 6 pm.",
                 pay="INR 4-6 LPA"),
-            job("kite", companies[1]["name"], "203", "Office Manager", "Hyderabad", 1,
+            job("kite", companies[1]["name"], "203", "Office Manager", "Jaipur", 1,
                 "Keep the office running."),
             job("kite", companies[1]["name"], "204", "Business Operations Associate", "Mumbai", 6,
                 "2-4 years of experience in operations and project management."),
         ],
         "lumen": [
-            job("lumen", companies[2]["name"], "301", "SEO Executive", "Hyderabad", 1,
+            job("lumen", companies[2]["name"], "301", "SEO Executive", "Jaipur", 1,
                 "Freshers welcome. Shift 10 am to 6 pm. SEO, keyword research, Ahrefs, Semrush and "
                 "Google Search Console.", pay="INR 3.0-4.5 LPA"),
             job("lumen", companies[2]["name"], "302", "Content Strategist", "Bengaluru", 5,
                 "1-2 years of experience. Content strategy, SEO, audience research and writing."),
             job("lumen", companies[2]["name"], "303", "GEO Specialist", "Remote", 9,
                 "Generative engine optimization and SEO."),
-            job("lumen", companies[2]["name"], "304", "Growth Associate", "Hyderabad", None,
+            job("lumen", companies[2]["name"], "304", "Growth Associate", "Jaipur", None,
                 "Cold outreach, social media and metrics. No date on this posting."),
         ],
         "delta": [
-            job("delta", companies[3]["name"], "401", "Data Engineer", "Hyderabad", 2,
+            job("delta", companies[3]["name"], "401", "Data Engineer", "Jaipur", 2,
                 "2-4 years of experience. Build ETL pipelines in Python, SQL and PySpark, orchestrate them with "
                 "Airflow, and model the Redshift data warehouse on AWS.", pay="INR 14-18 LPA"),
             job("delta", companies[3]["name"], "402", "Data Analyst", "Bengaluru", 4,

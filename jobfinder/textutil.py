@@ -3,11 +3,24 @@ from __future__ import annotations
 import html
 import re
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 _TAG = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
 _BREAKS = re.compile(r"</(p|li|div|h\d)>|<br\s*/?>", re.I)
+
+
+def clean_text(value: str) -> str:
+    """Remove stray keystrokes (control characters such as Escape) and square brackets."""
+    return "".join(ch for ch in str(value) if ch.isprintable() and ch not in "[]").strip()
+
+
+def clean_locations(values) -> List[str]:
+    """Clean a saved city list: strip stray characters, split on commas, drop empties."""
+    cleaned: List[str] = []
+    for value in values or []:
+        cleaned.extend(part.strip() for part in clean_text(value).split(",") if part.strip())
+    return cleaned
 
 
 def strip_html(value: Optional[str]) -> str:

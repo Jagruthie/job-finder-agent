@@ -4,7 +4,14 @@ profiles/*.json
 !profiles/example.json
 settings.json
 companies.csv
+companies.csv.bak-*
+tracker.csv
+seen_jobs.json
+last_run.json
+run_log.json
 state.json
+*.xlsx
+.*.tmp
 output/
 
 __pycache__/

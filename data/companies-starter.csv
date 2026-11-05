@@ -1,8 +1,8 @@
 # Starter list: companies whose public Greenhouse, Lever or Ashby boards had jobs in India or remote-India
 # when checked on 2026-10-23 (105 companies, about 1,800 jobs in India across product, data, engineering,
-# sales and operations). Every run reads this list, so you never have to name companies yourself; your own
-# companies.csv is optional and only adds to it. Boards change: a company that stops hiring in India simply
-# returns no matching jobs.
+# sales and operations). Optional: add them to your watch-list with 'companies import data/companies-starter.csv',
+# or read them on a run with 'run --starter'. Boards change: a company that stops hiring in India simply returns
+# no matching jobs.
 name,platform,board,email,x_handle
 Abacus,greenhouse,abacus,,
 Adyen,greenhouse,adyen,,

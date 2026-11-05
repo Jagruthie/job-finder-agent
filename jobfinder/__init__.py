@@ -1,3 +1,3 @@
-"""Job finder agent: fresh, skill-matched jobs from company career pages."""
+"""Freshlist: watch a fixed list of company career pages and see only the new jobs that match you."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
