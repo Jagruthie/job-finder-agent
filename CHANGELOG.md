@@ -9,7 +9,7 @@
 - `python -m jobfinder shortcut` makes a desktop icon, so daily use needs no typing in a terminal.
 - On a Mac, `python -m jobfinder autostart on` keeps the page running in the background, so you can pin it as a Safari tab. `autostart off` removes it.
 - Tick-boxes on New jobs for the optional sources on that one check.
-- A Learn tab: things to learn for each job, with a month calendar of apply deadlines, interviews, follow-ups and learn-by dates. Adding a match to the tracker lists the skills its posting names that your profile does not have.
+- A Learn tab: things to learn for each job, with a month calendar of apply deadlines, interviews, follow-ups and learn-by dates. Adding a match to the tracker lists the skills its posting names that your profile does not have, and saving a resume change lists the new skills you added. Each item shows the job's interview or deadline to apply.
 - `apply_deadline` and `interview_date` columns in the tracker. Older tracker files keep working.
 
 ### Changed

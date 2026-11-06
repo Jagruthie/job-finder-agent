@@ -58,7 +58,7 @@
 {% for job in jobs %}
 <article class="prep-job" id="job-{{ job.id }}">
   <p class="prep-title">{{ job.role }} at {{ job.company }}</p>
-  <p class="prep-meta">{{ job.status | show_value }}{% if job['items'] %} · {{ job.left }} of {{ job['items'] | length }} left to learn{% endif %} · <a href="{{ url_for('edit_entry', entry_id=job.id) }}">Edit job</a></p>
+  <p class="prep-meta">{{ job.status | show_value }}{% if job['items'] %} · {{ job.left }} of {{ job['items'] | length }} left to learn{% endif %}{% if job.target %} · <strong class="prep-target">{{ job.target[1] }}: {{ job.target[0] }}</strong>{% endif %} · <a href="{{ url_for('edit_entry', entry_id=job.id) }}">Edit job</a></p>
 
   {% if job.changes_made %}
   <p class="prep-change"><strong>What you changed on your resume</strong>{{ job.changes_made }}</p>
@@ -84,7 +84,7 @@
         <input type="hidden" name="month" value="{{ month }}">
         <input type="hidden" name="show" value="{{ show }}">
         <input type="checkbox" name="done" aria-label="{{ item.topic }} learned"{% if item.status == 'done' %} checked{% endif %} onchange="this.form.requestSubmit()">
-        <span class="learn-topic">{{ item.topic }}{% if item.source == 'job' %}<span class="learn-from">from the job</span>{% endif %}</span>
+        <span class="learn-topic">{{ item.topic }}{% if item.source == 'job' %}<span class="learn-from">from the job</span>{% elif item.source == 'resume' %}<span class="learn-from">added to your resume</span>{% endif %}{% if item.due and item.status != 'done' %}<span class="learn-due">{{ item.due_label }}: {{ item.due }}</span>{% endif %}</span>
         <noscript><button type="submit">Save</button></noscript>
       </form>
       <div class="learn-actions">

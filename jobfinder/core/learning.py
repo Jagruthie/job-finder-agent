@@ -11,7 +11,9 @@ from ..errors import NotFoundError, ValidationError
 
 COLUMNS = ["id", "entry_id", "topic", "status", "learn_by", "source"]
 STATUSES = ("to_learn", "done")
-SOURCES = ("job", "you")    # "job": a skill the posting names that your profile does not have
+# "job": a skill the posting names that your profile does not have. "resume": something you added to your resume
+# for this job. "you": typed on the Learn page.
+SOURCES = ("job", "resume", "you")
 
 
 def read(cfg: dict) -> List[dict]:
@@ -52,13 +54,35 @@ def add(cfg: dict, entry_id: str, topic: str, learn_by: str = "", source: str = 
 
 def add_from_job(cfg: dict, entry_id: str, topics: Iterable[str]) -> List[dict]:
     """Add the skills a posting names that your profile does not have, skipping any already listed for this job."""
+    return _add_topics(cfg, entry_id, topics, "job")
+
+
+def topics_from_resume_change(changes_made: str, profile_skills: Iterable[str], vocab) -> List[str]:
+    """What to learn from a resume change: the skills it names that your profiles do not have yet. A change that names
+    no skill at all is still something you may be asked about, so it becomes one item to be ready to explain."""
+    text = (changes_made or "").strip()
+    if not text:
+        return []
+    found = vocab.extract_skills(text)
+    if not found:
+        return [f"Be ready to explain: {text[:150]}"]
+    known = {skill.lower() for skill in profile_skills}
+    return [skill for skill in found if skill.lower() not in known]
+
+
+def add_from_resume(cfg: dict, entry_id: str, topics: Iterable[str]) -> List[dict]:
+    """Add what a resume change for this job asks you to learn, skipping any already listed for this job."""
+    return _add_topics(cfg, entry_id, topics, "resume")
+
+
+def _add_topics(cfg: dict, entry_id: str, topics: Iterable[str], source: str) -> List[dict]:
     rows = read(cfg)
     known = {row["topic"].lower() for row in rows if row["entry_id"] == entry_id}
     added = []
     for topic in (t.strip() for t in topics):
         if topic and topic.lower() not in known:
             known.add(topic.lower())
-            added.append(_new(entry_id, topic, "", "job"))
+            added.append(_new(entry_id, topic, "", source))
     if added:
         _save(cfg, rows + added)
     return added

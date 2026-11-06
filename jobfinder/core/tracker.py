@@ -1,5 +1,7 @@
 """The tracker: one list of every application from every source, kept in tracker.csv.
 
+Whatever you add to your resume for a job also goes on that job's Learn list (see learning.py).
+
 The rule that matters: you cannot mark an entry applied when changes_made is filled and how_i_would_explain_it is
 empty. Every resume change must be something you can explain in an interview.
 """
@@ -91,6 +93,16 @@ def _check_fields(fields: dict) -> None:
         raise ValidationError(f"Unknown tracker field: {', '.join(unknown)}.")
 
 
+def _learn_from_resume_change(cfg: dict, entry: dict) -> None:
+    """Put what you added to your resume for this job on its Learn list. Skills your profiles already have are left
+    out, since you had them before."""
+    from ..vocab import Vocab
+    from . import profiles
+    loaded, _ = profiles.load(profiles.find_paths(cfg))
+    known = [skill for profile in loaded for skill in profile.get("skills", [])]
+    learning.add_from_resume(cfg, entry["id"], learning.topics_from_resume_change(entry["changes_made"], known, Vocab.load()))
+
+
 def add(cfg: dict, today: Optional[date] = None, **fields) -> dict:
     """Add an entry from any source. Returns it, with its id. The same apply link cannot be added twice."""
     _check_fields(fields)
@@ -105,6 +117,7 @@ def add(cfg: dict, today: Optional[date] = None, **fields) -> dict:
     _settle_dates(entry, values, {}, cfg, today)
     _validate(entry, cfg)
     _save(cfg, rows + [entry])
+    _learn_from_resume_change(cfg, entry)
     return entry
 
 
@@ -138,6 +151,8 @@ def update(cfg: dict, entry_id: str, today: Optional[date] = None, **changes) ->
     _settle_dates(entry, values, before, cfg, today or date.today())
     _validate(entry, cfg)
     _save(cfg, rows)
+    if entry["changes_made"] != before["changes_made"]:
+        _learn_from_resume_change(cfg, entry)
     return entry
 
 
