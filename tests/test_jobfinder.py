@@ -936,7 +936,7 @@ class AlertInboxTests(unittest.TestCase):
                 json.dump({"use_alert_emails": True}, handle)   # the other optional sources stay off: tests never use the internet
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                code = main(["run", "--profiles-dir", folder, "--inbox", inbox,
+                code = main(["--data-dir", tmp, "run", "--profiles-dir", folder, "--inbox", inbox,
                              "--companies", os.path.join(tmp, "none.csv"), "--settings", settings,
                              "--state", os.path.join(tmp, "state.json"), "--out-dir", os.path.join(tmp, "out")])
             self.assertEqual(code, 0)

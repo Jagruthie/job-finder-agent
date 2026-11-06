@@ -1,6 +1,7 @@
 """The watch-list: the fixed list of company career pages kept in companies.csv."""
 from __future__ import annotations
 
+import csv
 from datetime import date
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
@@ -12,6 +13,11 @@ from ..discover import extract_boards
 from ..errors import NotFoundError, StorageError, ValidationError
 
 COLUMNS = ["company", "careers_url", "platform", "tier", "status", "added_date", "last_match_date", "notes"]
+MAX_COMPANIES_IN_FILE = 200     # each one means requests to job sites, so a huge file is refused rather than read
+_NAME_COLUMNS = {"company", "name", "company name", "company_name", "organisation", "organization"}
+_LINK_COLUMNS = {"careers_url", "careers url", "careers_page", "careers page", "career page", "careers link",
+                 "careers", "url", "link"}
+_WEBSITE_COLUMNS = {"website", "site", "homepage", "domain"}
 _BOARD_PAGES = {"greenhouse": "https://job-boards.greenhouse.io/{}", "lever": "https://jobs.lever.co/{}",
                 "ashby": "https://jobs.ashbyhq.com/{}"}
 
@@ -41,6 +47,12 @@ def read(cfg: dict) -> List[dict]:
     return [{**{column: "" for column in COLUMNS}, **row} for row in rows]
 
 
+def needs_migration(cfg: dict) -> bool:
+    """True when companies.csv still uses the older columns, so migrate has to run before it can be read."""
+    columns, _ = storage.read_csv(file_path(cfg, "companies_file"))
+    return "board" in columns and "careers_url" not in columns
+
+
 def _save(cfg: dict, rows: List[dict]) -> None:
     storage.write_csv(file_path(cfg, "companies_file"), COLUMNS, rows)
 
@@ -61,7 +73,7 @@ def _check_choice(label: str, value: str, allowed: Iterable[str]) -> str:
     return value
 
 
-def _new_row(url: str, name: str, tier: str, status: str, notes: str, today: date) -> dict:
+def new_row(url: str, name: str, tier: str, status: str, notes: str, today: date) -> dict:
     url = _clean_url(url)
     platform, board = detect_platform(url)
     if not name:
@@ -72,7 +84,7 @@ def _new_row(url: str, name: str, tier: str, status: str, notes: str, today: dat
             "added_date": today.isoformat(), "last_match_date": "", "notes": notes}
 
 
-def _duplicate_of(row: dict, rows: List[dict]) -> Optional[dict]:
+def duplicate_of(row: dict, rows: List[dict]) -> Optional[dict]:
     board = board_of(row)
     for other in rows:
         same_board = board and other["platform"] == row["platform"] and board_of(other) == board
@@ -87,8 +99,8 @@ def add(cfg: dict, url: str, name: str = "", tier: str = "watch", status: str = 
     """Add one company. The platform comes from the link; a page that is not Greenhouse, Lever or Ashby is kept
     as "other", which is listed but cannot be read."""
     rows = read(cfg)
-    row = _new_row(url, name, tier, status, notes, today or date.today())
-    duplicate = _duplicate_of(row, rows)
+    row = new_row(url, name, tier, status, notes, today or date.today())
+    duplicate = duplicate_of(row, rows)
     if duplicate:
         raise ValidationError(f"Already on your watch-list as '{duplicate['company']}'.")
     _save(cfg, rows + [row])
@@ -101,11 +113,11 @@ def add_many(cfg: dict, companies: List[Tuple[str, str]], today: Optional[date] 
     added, skipped = [], []
     for name, url in companies:
         try:
-            row = _new_row(url, name, "watch", "active", "", today or date.today())
+            row = new_row(url, name, "watch", "active", "", today or date.today())
         except ValidationError as error:
             skipped.append({"company": name, "reason": str(error)})
             continue
-        duplicate = _duplicate_of(row, rows + added)
+        duplicate = duplicate_of(row, rows + added)
         if duplicate:
             skipped.append({"company": name, "reason": f"already on your watch-list as '{duplicate['company']}'"})
         else:
@@ -153,6 +165,101 @@ def _row_from_plain(row: dict) -> Tuple[str, str]:
     return name, url
 
 
+def _first_value(item: dict, columns: set) -> str:
+    return next((item[column] for column in item if column in columns and item[column]), "")
+
+
+def parse_plain(text: str) -> List[dict]:
+    """Companies from the text of any plain CSV: with a header naming a company, a careers link or platform and
+    board, or a single column of names or links with no header. Nothing is checked or saved here."""
+    lines = [line for line in (text or "").splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    table = [[cell.strip() for cell in row] for row in csv.reader(lines)]
+    if not table:
+        raise ValidationError("That file has no companies in it.")
+    header = [cell.lower() for cell in table[0]]
+    known = _NAME_COLUMNS | _LINK_COLUMNS | _WEBSITE_COLUMNS
+    if set(header) & known or {"platform", "board"} <= set(header):
+        items = [dict(zip(header, row)) for row in table[1:]]
+    elif all(len(row) == 1 for row in table):
+        items = [{"url" if "." in row[0] and " " not in row[0] else "name": row[0]} for row in table]
+    else:
+        raise ValidationError("Freshlist could not find a company name or careers link column. The columns it found "
+                              f"are: {', '.join(table[0])}. Name one of them company or careers_url.")
+    companies = []
+    for item in items:
+        link = _first_value(item, _LINK_COLUMNS)
+        platform, board = item.get("platform", "").lower(), item.get("board", "")
+        if not link and platform in PLATFORMS and board:
+            link = careers_url_for(platform, board)
+        name, website = _first_value(item, _NAME_COLUMNS), _first_value(item, _WEBSITE_COLUMNS)
+        if name or link or website:
+            companies.append({"company": name, "careers_url": link, "website": website,
+                              "tier": item.get("tier", "").lower(), "status": item.get("status", "").lower(),
+                              "notes": item.get("notes", "")})
+    if not companies:
+        raise ValidationError("That file has no companies in it.")
+    if len(companies) > MAX_COMPANIES_IN_FILE:
+        raise ValidationError(f"That file has {len(companies)} companies. Freshlist checks at most "
+                              f"{MAX_COMPANIES_IN_FILE} at a time, to go easy on job sites. Split it into smaller files.")
+    return companies
+
+
+def parse_links(text: str) -> List[dict]:
+    """Companies from pasted text holding Greenhouse, Lever or Ashby links."""
+    boards = extract_boards(text or "")
+    if not boards:
+        raise ValidationError("No Greenhouse, Lever or Ashby links found. Links look like jobs.lever.co/acme, "
+                              "boards.greenhouse.io/acme or jobs.ashbyhq.com/acme.")
+    return [{"company": "", "careers_url": careers_url_for(platform, board), "website": "", "tier": "", "status": "",
+             "notes": ""} for platform, board in boards]
+
+
+def prepare(cfg: dict, plain: List[dict], today: Optional[date] = None) -> List[dict]:
+    """Sort companies from a file before any site is contacted. Each gets a state: "check" (a page Freshlist can
+    read), "search" (only a name, so its job page must be looked for), "cannot_read", "listed" or "bad"."""
+    known = read(cfg)
+    prepared: List[dict] = []
+    for item in plain:
+        if not item["careers_url"]:
+            duplicate = next((row for row in known if row["company"].lower() == item["company"].lower()), None)
+            if duplicate and item["company"]:
+                prepared.append({**item, "state": "listed", "note": f"Already on your list as '{duplicate['company']}'."})
+            else:
+                prepared.append({**item, "state": "search", "note": ""})
+            continue
+        try:
+            row = new_row(item["careers_url"], item["company"], item["tier"], item["status"], item["notes"],
+                          today or date.today())
+        except ValidationError as error:
+            prepared.append({**item, "state": "bad", "note": str(error)})
+            continue
+        duplicate = duplicate_of(row, known)
+        if duplicate:
+            prepared.append({**row, "state": "listed", "note": f"Already on your list as '{duplicate['company']}'."})
+            continue
+        known.append(row)
+        prepared.append({**row, "state": "check" if board_of(row) else "cannot_read",
+                         "note": "" if board_of(row) else "Freshlist can only read Greenhouse, Lever and Ashby pages."})
+    return prepared
+
+
+def add_rows(cfg: dict, wanted: List[dict], today: Optional[date] = None) -> dict:
+    """Add companies you picked after a check. Returns {"added": rows, "skipped": [{"company", "reason"}]}."""
+    rows = read(cfg)
+    added, skipped = [], []
+    for item in wanted:
+        row = new_row(item["careers_url"], item["company"], item.get("tier", ""), item.get("status", ""),
+                      item.get("notes", ""), today or date.today())
+        duplicate = duplicate_of(row, rows + added)
+        if duplicate:
+            skipped.append({"company": row["company"], "reason": f"already on your list as '{duplicate['company']}'"})
+        else:
+            added.append(row)
+    if added:
+        _save(cfg, rows + added)
+    return {"added": added, "skipped": skipped}
+
+
 def import_csv(cfg: dict, path: str, today: Optional[date] = None) -> dict:
     """Bulk add from a plain CSV with a header row. Needs a careers_url (or url) column, or platform and board
     columns; company or name, tier, status and notes are used when present. Returns
@@ -169,12 +276,12 @@ def import_csv(cfg: dict, path: str, today: Optional[date] = None) -> dict:
         item = {key.lower(): value for key, value in raw.items()}
         name, url = _row_from_plain(item)
         try:
-            row = _new_row(url, name, item.get("tier", ""), item.get("status", ""), item.get("notes", ""),
+            row = new_row(url, name, item.get("tier", ""), item.get("status", ""), item.get("notes", ""),
                            today or date.today())
         except ValidationError as error:
             skipped.append({"company": name or url, "reason": str(error)})
             continue
-        duplicate = _duplicate_of(row, rows + added)
+        duplicate = duplicate_of(row, rows + added)
         if duplicate:
             skipped.append({"company": row["company"], "reason": f"already listed as '{duplicate['company']}'"})
         else:

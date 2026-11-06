@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Companies · Freshlist{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Companies</h1>
+  <p class="summary">
+    {% if total %}
+      {{ total }} on your list · <strong>{{ readable }}</strong> checked on each run{% if unreadable %} · <span class="warn-text">{{ unreadable }} can't be read</span>{% endif %}
+    {% else %}
+      Add the career pages you want to watch. Around 30 to 40 is a good size.
+    {% endif %}
+  </p>
+</div>
+
+<form class="panel add-form" method="post" action="{{ url_for('add_company') }}">
+  <h2>Add a company</h2>
+  <div class="fields">
+    <label class="field field-wide">Careers page link
+      <input name="url" type="text" inputmode="url" required placeholder="https://jobs.lever.co/example" value="{{ entered.get('url', '') }}">
+    </label>
+    <label class="field"><span>Name <span class="optional">optional</span></span>
+      <input name="name" type="text" value="{{ entered.get('name', '') }}">
+    </label>
+    <label class="field field-tier">Tier
+      <select name="tier">
+        {% for tier in tiers %}<option value="{{ tier }}"{% if entered.get('tier') == tier %} selected{% endif %}>{{ tier }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="primary">Add</button>
+  </div>
+  <p class="check-note"><a href="{{ url_for('import_companies') }}">Add many from a CSV file or pasted links</a></p>
+</form>
+
+{% if total %}
+<form class="filters" method="get" action="{{ url_for('companies') }}">
+  <label>Tier
+    <select name="tier" onchange="this.form.requestSubmit()">
+      <option value="">All</option>
+      {% for tier in tiers %}<option value="{{ tier }}"{% if filters.tier == tier %} selected{% endif %}>{{ tier }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Status
+    <select name="status" onchange="this.form.requestSubmit()">
+      <option value="">All</option>
+      {% for status in statuses %}<option value="{{ status }}"{% if filters.status == status %} selected{% endif %}>{{ status }}</option>{% endfor %}
+    </select>
+  </label>
+  <noscript><button type="submit">Filter</button></noscript>
+</form>
+
+{% if rows %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Company</th><th>Platform</th><th>Tier</th><th>Status</th><th>Added</th><th>Last match</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td class="company">
+          {% set link = row.careers_url | safe_link %}
+          {% if link %}<a href="{{ link }}" target="_blank" rel="noopener noreferrer">{{ row.company }}</a>{% else %}{{ row.company }}{% endif %}
+        </td>
+        <td>
+          {% if row.platform == 'other' %}<span class="badge badge-warn" title="Freshlist can only read Greenhouse, Lever and Ashby pages">can't be read</span>
+          {% else %}{{ row.platform }}{% endif %}
+        </td>
+        {% for column, choices in [('tier', tiers), ('status', statuses)] %}
+        <td>
+          <form method="post" action="{{ url_for('update_company') }}">
+            <input type="hidden" name="company" value="{{ row.company }}">
+            <input type="hidden" name="filter_tier" value="{{ filters.tier }}">
+            <input type="hidden" name="filter_status" value="{{ filters.status }}">
+            <select name="{{ column }}" aria-label="{{ column | capitalize }} for {{ row.company }}" onchange="this.form.requestSubmit()">
+              {% for choice in choices %}<option value="{{ choice }}"{% if row[column] == choice %} selected{% endif %}>{{ choice }}</option>{% endfor %}
+            </select>
+            <noscript><button type="submit">Save</button></noscript>
+          </form>
+        </td>
+        {% endfor %}
+        <td class="date">{{ row.added_date or '–' }}</td>
+        <td class="date">{{ row.last_match_date or '–' }}</td>
+        <td class="notes">{{ row.notes }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="empty">No companies match these filters. <a href="{{ url_for('companies') }}">Show all</a></p>
+{% endif %}
+{% endif %}
+{% endblock %}

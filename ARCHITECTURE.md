@@ -5,7 +5,7 @@ Freshlist has two layers, so a web page can later use the same logic as the term
 ```
   Terminal layer                    Core library                           Files
   jobfinder/cli.py   ─── calls ──▶  jobfinder/core/      ─── uses ──▶      jobfinder/storage.py
-  jobfinder/setup.py                  watchlist, runner, tracker,            companies.csv, tracker.csv,
+  jobfinder/setup.py                  watchlist, runner, tracker,            companies.csv, tracker.csv, learning.csv,
   (parse, ask, print)                 today, review, discovery, profiles     seen_jobs.json, last_run.json,
                                     jobfinder/pipeline.py, filters.py,       run_log.json
   A future web UI    ─── calls ──▶    match.py, sources/
@@ -38,15 +38,17 @@ Freshlist has two layers, so a web page can later use the same logic as the term
 - A tracker entry gets a random id such as `t-1a2b3c4d` when it is created. Editing or sorting rows never changes it.
 - A match's number is only a shortcut for the day it was found. The numbers stay the same for later runs that day.
 
-## Plugging in a web UI
+## The web UI
 
-A UI needs no new logic. It loads the config and calls the same functions the terminal does:
+`jobfinder/web/` is a small Flask app, opened with `python -m jobfinder ui`. It listens only on this computer and holds no job-search logic. A run goes through `web/background.py`, one at a time, and the company list can't change until it finishes. Each screen loads the config and calls the same functions the terminal does:
 
 | Screen | Call |
 | --- | --- |
 | Run, with progress per company | `core.runner.run(cfg, profiles, progress=callback)`. The callback gets `{company, platform, ok, jobs, error, done, total}` |
 | Watch-list table | `core.watchlist.list_companies`, `add`, `set_tier`, `set_status`, `import_csv` |
+| Add many from a file or links | `core.watchlist.parse_plain` or `parse_links`, then `prepare`, `core.discovery.check_file`, and `watchlist.add_rows` for what you pick |
 | Tracker table | `core.tracker.list_entries`, `add`, `add_from_run`, `update`, `due`, `export_xlsx` |
+| Learn page and calendar | `core.agenda.month_view`, `jobs_to_prepare`, and `core.learning.add`, `set_done`, `remove` |
 | Today page | `core.today.checklist` |
 | Review page | `core.review.review` |
 

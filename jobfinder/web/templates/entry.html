@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit entry' if entry_id else 'Add entry' }} · Freshlist{% endblock %}
+{% macro text(name, label, hint='', type='text') %}
+<label class="field">{{ label }}
+  <input name="{{ name }}" type="{{ type }}" value="{{ entry.get(name, '') }}">
+  {% if hint %}<span class="field-hint">{{ hint }}</span>{% endif %}
+</label>
+{% endmacro %}
+{% macro choice(name, label, options, blank='') %}
+<label class="field">{{ label }}
+  <select name="{{ name }}">
+    {% if blank %}<option value="">{{ blank }}</option>{% endif %}
+    {% for option in options %}<option value="{{ option }}"{% if entry.get(name) == option %} selected{% endif %}>{{ option | show_value }}</option>{% endfor %}
+  </select>
+</label>
+{% endmacro %}
+{% block content %}
+<a class="back-link" href="{{ url_for('tracker_list') }}">← Back to tracker</a>
+<div class="page-head"><h1>{{ 'Edit entry' if entry_id else 'Add entry' }}</h1></div>
+
+<form method="post" action="{{ url_for('save_entry', entry_id=entry_id) if entry_id else url_for('add_entry') }}">
+  <section class="form-section">
+    <h2>The job</h2>
+    <div class="form-grid">
+      {{ text('company', 'Company') }}
+      {{ text('role', 'Role') }}
+      {{ text('apply_link', 'Apply link') }}
+      {{ text('posted_date', 'Posted date', type='date') }}
+      {{ choice('source', 'Where you found it', sources, blank='Choose') }}
+      {{ text('apply_deadline', 'Deadline to apply', 'If the job gives one. It shows on your calendar.', 'date') }}
+    </div>
+  </section>
+
+  <section class="form-section">
+    <h2>Status</h2>
+    <div class="form-grid">
+      {{ choice('status', 'Status', statuses) }}
+      {{ text('applied_date', 'Applied date', 'Filled in for you when you mark it applied', 'date') }}
+      {{ text('followup_date', 'Follow-up date', 'Applied date + ' ~ followup_days ~ ' days, unless you set your own', 'date') }}
+      {{ text('interview_date', 'Interview date', 'It shows on your calendar.', 'date') }}
+    </div>
+  </section>
+
+  <section class="form-section">
+    <h2>Your resume</h2>
+    <div class="form-grid">
+      {{ choice('resume_version', 'Resume version', versions, blank='None') }}
+      <label class="field field-full">What you changed for this job
+        <textarea name="changes_made" rows="2">{{ entry.get('changes_made', '') }}</textarea>
+      </label>
+      <label class="field field-full">How you would explain it in an interview
+        <textarea name="how_i_would_explain_it" rows="2">{{ entry.get('how_i_would_explain_it', '') }}</textarea>
+        <span class="field-hint">If you changed your resume, you need this before you can mark the job applied.</span>
+      </label>
+    </div>
+  </section>
+
+  <section class="form-section">
+    <h2>Outreach</h2>
+    <div class="form-grid">
+      {{ choice('outreach_status', 'Outreach status', outreach) }}
+      {{ text('founder_x_handle', 'Founder X handle') }}
+      {{ text('company_email', 'Company email') }}
+      <label class="field field-full">Notes
+        <textarea name="notes" rows="2">{{ entry.get('notes', '') }}</textarea>
+      </label>
+    </div>
+  </section>
+
+  <button type="submit" class="primary">{{ 'Save' if entry_id else 'Add entry' }}</button>
+</form>
+{% endblock %}

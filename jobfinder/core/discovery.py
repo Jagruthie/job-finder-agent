@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from datetime import date
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
@@ -39,6 +40,62 @@ def check_boards(cfg: dict, boards: List[Tuple[str, str]], sleep=time.sleep,
         if progress:
             progress(results[-1])
     return results
+
+
+def check_file(cfg: dict, prepared: List[dict], fetch=fetch_board, sleep=time.sleep,
+               progress: Optional[Progress] = None) -> List[dict]:
+    """Check companies from watchlist.prepare. Each comes back with jobs, in_your_cities, a state and `keep`, which
+    is True only for a company with jobs in your cities whose page came from the file. A page found from only a name
+    could belong to another company with that name, so you decide about those yourself."""
+    known = watchlist.read(cfg)
+    results: List[dict] = []
+    contacted = False
+
+    def read(platform: str, board: str) -> dict:
+        return check_board(platform, board, cfg["preferred_locations"], fetch, cfg["remote_country"])
+
+    for index, item in enumerate(prepared):
+        result = {**item, "jobs": 0, "in_your_cities": 0, "guessed": False, "keep": False}
+        if item["state"] in ("check", "search"):
+            if contacted:
+                sleep(cfg["request_delay_seconds"])
+            contacted = True
+            try:
+                if item["state"] == "check":
+                    found = read(item["platform"], watchlist.board_of(item))
+                else:
+                    found = find_board({"name": item["company"], "website": item["website"],
+                                        "slug": norm(item["company"]).replace(" ", "-")}, read, sleep)
+            except Exception as error:   # a dropped connection or a malformed reply fails one company, not the check
+                found = {"ok": False, "error": f"{type(error).__name__}: {error}"}
+            _settle(result, found, cfg, known, results)
+        results.append(result)
+        if progress:
+            progress({"company": item.get("company") or item.get("careers_url", ""), "done": index + 1,
+                      "total": len(prepared)})
+    return results
+
+
+def _settle(result: dict, found: dict, cfg: dict, known: List[dict], earlier: List[dict]) -> None:
+    searched = result["state"] == "search"
+    if not found["ok"]:
+        result.update(state="not_found" if searched else "failed",
+                      note="No Greenhouse, Lever or Ashby page found for this name." if searched else found["error"])
+        return
+    if searched:
+        row = watchlist.new_row(watchlist.careers_url_for(found["platform"], found["board"]), result["company"],
+                                result["tier"], result["status"], result["notes"], date.today())
+        result.update(row)
+        result["guessed"] = True
+        chosen = [item for item in earlier if item.get("careers_url")]
+        duplicate = watchlist.duplicate_of(row, known + chosen)
+        if duplicate:
+            result.update(state="listed", note=f"Already on your list as '{duplicate['company']}'.")
+            return
+    result.update(jobs=found["jobs"], in_your_cities=found["in_your_cities"])
+    result["state"] = "good" if found["in_your_cities"] else ("elsewhere" if found["jobs"] else "no_jobs")
+    result["note"] = "Found from the name only. Open the link to check it is the right company." if searched else ""
+    result["keep"] = result["state"] == "good" and not searched
 
 
 def add_results(cfg: dict, results: List[dict]) -> dict:

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Review · Freshlist{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Review</h1>
+  <p class="summary">{{ report.date }} · This only reports. Nothing here changes your files.</p>
+</div>
+
+{% set checkpoint = report.checkpoint %}
+<div class="checkpoint checkpoint-{{ checkpoint.state }}">
+  <h2>Checkpoint</h2>
+  <p>{{ checkpoint.message }}</p>
+</div>
+
+{% if report.quiet %}
+<div class="panel due-panel">
+  <h2>Quiet companies ({{ report.quiet | length }})</h2>
+  <ul class="due-list">
+    {% for company in report.quiet %}
+    <li><span>{{ company.company }}</span><span class="due-when">{{ company.suggestion }}</span></li>
+    {% endfor %}
+  </ul>
+  <p class="check-note">To swap one, change its status on <a href="{{ url_for('companies') }}">Companies</a>.</p>
+</div>
+{% endif %}
+
+{% if report.failed_last_run %}
+<div class="panel run-result">
+  <div class="problem-list">
+    <h3>Could not be read on the last run</h3>
+    <ul>{% for item in report.failed_last_run %}<li>{{ item.company }}: {{ item.error }}</li>{% endfor %}</ul>
+  </div>
+</div>
+{% endif %}
+
+{% if report.companies %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Company</th><th>Last {{ recent_days }} days</th><th>All time</th><th>Last match</th><th>Days without</th><th>Tier</th><th>Status</th></tr>
+    </thead>
+    <tbody>
+      {% for company in report.companies %}
+      <tr>
+        <td class="company">{{ company.company }}{% if company.flag_quiet %} <span class="badge badge-quiet">quiet</span>{% endif %}</td>
+        <td class="number">{{ company.matches_recent }}</td>
+        <td class="number">{{ company.matches_total }}</td>
+        <td class="date">{{ company.last_match_date or '–' }}</td>
+        <td class="date">{{ company.days_without_match if company.days_without_match is not none else '–' }}</td>
+        <td>{{ company.tier }}</td>
+        <td>{{ company.status }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="empty">No companies on your list yet. <a href="{{ url_for('companies') }}">Add some</a></p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Convert your list · Freshlist{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Companies</h1></div>
+<div class="panel">
+  <h2>Convert your company list first</h2>
+  <p>Your <code>companies.csv</code> uses the older format. Converting it adds the new columns and keeps your companies. A backup of the old file is kept next to it.</p>
+  <form method="post" action="{{ url_for('migrate_companies') }}">
+    <button type="submit" class="primary">Convert my list</button>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Learn · Freshlist{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Learn</h1>
+  <p class="summary">What to learn for each job, and the dates to keep in mind.</p>
+</div>
+
+{% for event in missed %}
+<p class="notice notice-warning" role="status">The deadline to apply for {{ event.text }} passed on {{ event.date }}. <a href="{{ url_for('edit_entry', entry_id=event.entry_id) }}">Update it</a></p>
+{% endfor %}
+
+<section class="panel" aria-label="Calendar">
+  <div class="calendar-head">
+    <h2>{{ view.label }}</h2>
+    <div class="calendar-nav">
+      <a href="{{ url_for('learn', month=view.previous, show=show or none) }}">← Previous</a>
+      {% if not view.is_this_month %}<a href="{{ url_for('learn', show=show or none) }}">This month</a>{% endif %}
+      <a href="{{ url_for('learn', month=view.next, show=show or none) }}">Next →</a>
+    </div>
+  </div>
+  <table class="calendar">
+    <thead><tr>{% for name in ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] %}<th scope="col">{{ name }}</th>{% endfor %}</tr></thead>
+    <tbody>
+      {% for week in view.weeks %}
+      <tr>
+        {% for day in week %}
+        <td class="{{ 'is-today' if day.is_today }} {{ 'other-month' if not day.in_month }}">
+          <span class="calendar-day">{{ day.day }}</span>
+          {% for event in day.events %}
+          <a class="chip chip-{{ event.kind }}" href="#job-{{ event.entry_id }}" title="{{ event.label }}: {{ event.text }}">{{ event.text }}</a>
+          {% endfor %}
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <ul class="calendar-key">
+    <li><span class="key-deadline"></span>Apply by</li>
+    <li><span class="key-interview"></span>Interview</li>
+    <li><span class="key-followup"></span>Follow up</li>
+    <li><span class="key-learn"></span>Learn by</li>
+  </ul>
+  {% if view.events %}
+  <ul class="agenda">
+    {% for event in view.events %}
+    <li><span class="date">{{ event.date }}</span><a href="#job-{{ event.entry_id }}">{{ event.label }}: {{ event.text }}</a></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="check-note">No dates this month.</p>
+  {% endif %}
+</section>
+
+{% if jobs %}
+<h2 class="section-title">Your jobs ({{ jobs | length }})</h2>
+{% for job in jobs %}
+<article class="prep-job" id="job-{{ job.id }}">
+  <p class="prep-title">{{ job.role }} at {{ job.company }}</p>
+  <p class="prep-meta">{{ job.status | show_value }}{% if job['items'] %} · {{ job.left }} of {{ job['items'] | length }} left to learn{% endif %} · <a href="{{ url_for('edit_entry', entry_id=job.id) }}">Edit job</a></p>
+
+  {% if job.changes_made %}
+  <p class="prep-change"><strong>What you changed on your resume</strong>{{ job.changes_made }}</p>
+  {% endif %}
+
+  <form class="prep-dates" method="post" action="{{ url_for('save_job_dates', entry_id=job.id) }}">
+    <input type="hidden" name="month" value="{{ month }}">
+    <input type="hidden" name="show" value="{{ show }}">
+    <label class="field">Deadline to apply, if any
+      <input type="date" name="apply_deadline" value="{{ job.apply_deadline }}">
+    </label>
+    <label class="field">Interview date
+      <input type="date" name="interview_date" value="{{ job.interview_date }}">
+    </label>
+    <button type="submit">Save dates</button>
+  </form>
+
+  {% if job['items'] %}
+  <ul class="learn-list">
+    {% for item in job['items'] %}
+    <li class="learn-item{{ ' is-done' if item.status == 'done' }}">
+      <form class="learn-main" method="post" action="{{ url_for('tick_learning', item_id=item.id) }}">
+        <input type="hidden" name="month" value="{{ month }}">
+        <input type="hidden" name="show" value="{{ show }}">
+        <input type="checkbox" name="done" aria-label="{{ item.topic }} learned"{% if item.status == 'done' %} checked{% endif %} onchange="this.form.requestSubmit()">
+        <span class="learn-topic">{{ item.topic }}{% if item.source == 'job' %}<span class="learn-from">from the job</span>{% endif %}</span>
+        <noscript><button type="submit">Save</button></noscript>
+      </form>
+      <div class="learn-actions">
+        <form method="post" action="{{ url_for('date_learning', item_id=item.id) }}">
+          <input type="hidden" name="month" value="{{ month }}">
+          <input type="hidden" name="show" value="{{ show }}">
+          <input type="date" name="learn_by" value="{{ item.learn_by }}" aria-label="Learn {{ item.topic }} by" onchange="this.form.requestSubmit()">
+          <noscript><button type="submit">Save</button></noscript>
+        </form>
+        <form method="post" action="{{ url_for('remove_learning', item_id=item.id) }}">
+          <input type="hidden" name="month" value="{{ month }}">
+          <input type="hidden" name="show" value="{{ show }}">
+          <button type="submit" class="text-button" aria-label="Remove {{ item.topic }}">Remove</button>
+        </form>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <form class="learn-add" method="post" action="{{ url_for('add_learning', entry_id=job.id) }}">
+    <input type="hidden" name="month" value="{{ month }}">
+    <input type="hidden" name="show" value="{{ show }}">
+    <input type="text" name="topic" required placeholder="Something to learn for this job" aria-label="Something to learn for {{ job.role }} at {{ job.company }}">
+    <input type="date" name="learn_by" aria-label="Learn by (optional)">
+    <button type="submit">Add</button>
+  </form>
+</article>
+{% endfor %}
+{% if finished and not show %}
+<p class="check-note"><a href="{{ url_for('learn', month=month, show='all') }}">Also show {{ finished }} finished {{ 'job' if finished == 1 else 'jobs' }}</a></p>
+{% elif show %}
+<p class="check-note"><a href="{{ url_for('learn', month=month) }}">Hide finished jobs</a></p>
+{% endif %}
+{% else %}
+<p class="empty">Add a job to your tracker from <a href="{{ url_for('jobs') }}">New jobs</a> or the <a href="{{ url_for('tracker_list') }}">Tracker</a>, and its list starts here.</p>
+{% endif %}
+{% endblock %}
