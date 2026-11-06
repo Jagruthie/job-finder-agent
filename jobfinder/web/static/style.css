@@ -224,6 +224,8 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; 
 .learn-topic { overflow-wrap: anywhere; }
 .learn-item.is-done .learn-topic { color: var(--muted); text-decoration: line-through; }
 .learn-from { margin-left: 4px; color: var(--muted); font-size: 11px; }
+.learn-due { display: block; color: var(--warn-text); font-size: 12px; }
+.prep-target { color: var(--warn-text); font-weight: 600; }
 .learn-actions { display: flex; align-items: center; gap: 6px; }
 .learn-actions input { padding: 3px 6px; font-size: 13px; }
 .text-button { padding: 3px 6px; background: none; border: 0; color: var(--muted); font-size: 12px; text-decoration: underline; }

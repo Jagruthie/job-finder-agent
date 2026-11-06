@@ -80,6 +80,17 @@ def month_view(cfg: dict, year: int, month: int, today: Optional[date] = None) -
             "this_month": today.strftime("%Y-%m"), "is_this_month": (year, month) == (today.year, today.month)}
 
 
+def _target(entry: dict, today: date) -> Optional[Tuple[str, str]]:
+    """The date to learn things by for this job, when you have one: the interview, or else the deadline to apply."""
+    interview = _parse(entry["interview_date"])
+    if interview and interview >= today:
+        return entry["interview_date"], "Before the interview"
+    deadline = _parse(entry["apply_deadline"])
+    if entry["status"] == "to_apply" and deadline and deadline >= today:
+        return entry["apply_deadline"], "Before the deadline to apply"
+    return None
+
+
 def jobs_to_prepare(cfg: dict, show_finished: bool = False, today: Optional[date] = None) -> List[dict]:
     """Each tracker entry with its things to learn. Nearest interview or deadline first, then the newest added."""
     today = today or date.today()
@@ -88,9 +99,12 @@ def jobs_to_prepare(cfg: dict, show_finished: bool = False, today: Optional[date
     for position, entry in enumerate(tracker.read(cfg)):
         if entry["status"] in FINISHED and not show_finished:
             continue
-        mine = [item for item in items if item["entry_id"] == entry["id"]]
+        target = _target(entry, today)
+        mine = [{**item, "due": item["learn_by"] if _parse(item["learn_by"]) else (target[0] if target else ""),
+                 "due_label": "Learn by" if _parse(item["learn_by"]) else (target[1] if target else "")}
+                for item in items if item["entry_id"] == entry["id"]]
         dates = [d for d in (_parse(entry["interview_date"]), _parse(entry["apply_deadline"])) if d and d >= today]
-        jobs.append({**entry, "items": sorted(mine, key=lambda item: item["status"] == "done"),
+        jobs.append({**entry, "items": sorted(mine, key=lambda item: item["status"] == "done"), "target": target,
                      "left": sum(item["status"] != "done" for item in mine), "next_date": min(dates) if dates else None,
                      "_position": position})
     return sorted(jobs, key=lambda job: (job["next_date"] is None, job["next_date"] or today, -job["_position"]))

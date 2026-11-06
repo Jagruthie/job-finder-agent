@@ -190,6 +190,13 @@ def create_app(data_dir=None, settings=None, fetch=None) -> Flask:
             raise NotFoundError(f"No tracker entry with id '{entry_id}'.")
         return entry
 
+    def learning_for(entry_id: str) -> list:
+        return [item for item in learning.read(config()) if item["entry_id"] == entry_id]
+
+    def learn_note(entry_id: str, before: int) -> str:
+        added = len(learning_for(entry_id)) - before
+        return f" {added} new {'thing' if added == 1 else 'things'} to learn went on your Learn list." if added > 0 else ""
+
     @app.get("/tracker")
     def tracker_list():
         cfg = config()
@@ -214,7 +221,7 @@ def create_app(data_dir=None, settings=None, fetch=None) -> Flask:
         except FreshlistError as error:
             flash(str(error), "error")
             return entry_page(values, code=400)
-        flash(f"Added {entry['role']} at {entry['company']}.", "success")
+        flash(f"Added {entry['role']} at {entry['company']}." + learn_note(entry["id"], 0), "success")
         return redirect(url_for("tracker_list"))
 
     @app.post("/tracker/export")
@@ -242,13 +249,14 @@ def create_app(data_dir=None, settings=None, fetch=None) -> Flask:
         if not changes:
             flash("Nothing changed.", "warning")
             return redirect(url_for("tracker_list"))
+        listed = len(learning_for(entry_id))
         try:
             with write_lock:
                 entry = tracker.update(cfg, entry_id, **changes)
         except FreshlistError as error:
             flash(str(error), "error")
             return entry_page(values, entry_id, code=400)
-        flash(f"Saved {entry['role']} at {entry['company']}.", "success")
+        flash(f"Saved {entry['role']} at {entry['company']}." + learn_note(entry_id, listed), "success")
         return redirect(url_for("tracker_list"))
 
     @app.post("/tracker/<entry_id>/status")

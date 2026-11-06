@@ -901,6 +901,50 @@ class LearnPageTests(TrackerCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(learning.read(self.cfg), [])
 
+    def test_a_skill_you_add_to_your_resume_goes_to_learn(self):
+        entry = self.add()
+        response = self.client.post(f"/tracker/{entry['id']}", data=self.form(
+            entry, changes_made="Added a Tableau dashboard project and Python scripts"), follow_redirects=True)
+        self.assertIn("2 new things to learn", response.get_data(as_text=True))
+        self.assertEqual([(i["topic"], i["source"]) for i in learning.read(self.cfg)], [("Python", "resume"), ("Tableau", "resume")])
+        self.assertIn("added to your resume", self.page())
+
+    def test_a_skill_already_in_your_profile_is_not_listed(self):
+        (self.folder / "profiles").mkdir()
+        (self.folder / "profiles" / "pm.json").write_text(json.dumps({"name": "pm", "skills": ["SQL"], "titles": []}), encoding="utf-8")
+        self.add(changes_made="Moved my SQL project to the top and added Tableau")
+        self.assertEqual([i["topic"] for i in learning.read(self.cfg)], ["Tableau"])
+
+    def test_a_change_naming_no_skill_becomes_one_thing_to_explain(self):
+        self.add(changes_made="Reworded my summary")
+        self.assertEqual([i["topic"] for i in learning.read(self.cfg)], ["Be ready to explain: Reworded my summary"])
+
+    def test_editing_the_change_adds_only_what_is_new(self):
+        entry = self.add(changes_made="Added Tableau")
+        tracker.update(self.cfg, entry["id"], changes_made="Added Tableau and Python")
+        tracker.update(self.cfg, entry["id"], notes="nothing about the resume")
+        self.assertEqual(sorted(i["topic"] for i in learning.read(self.cfg)), ["Python", "Tableau"])
+
+    def test_adding_by_hand_with_a_change_lists_it_too(self):
+        response = self.client.post("/tracker/new", data={"company": "Sample Robotics", "role": "SEO Executive",
+                                                          "source": "referral", "status": "to_apply",
+                                                          "changes_made": "Added Google Search Console"}, follow_redirects=True)
+        self.assertIn("1 new thing to learn", response.get_data(as_text=True))
+
+    def test_each_item_points_to_the_interview_or_the_deadline(self):
+        soon = (date.today() + timedelta(days=5)).isoformat()
+        later = (date.today() + timedelta(days=9)).isoformat()
+        entry = self.add(apply_deadline=soon, changes_made="Added Tableau")
+        text = self.page()
+        self.assertIn(f"Before the deadline to apply: {soon}", text)
+        tracker.update(self.cfg, entry["id"], interview_date=later)
+        self.assertIn(f"Before the interview: {later}", self.page())
+
+    def test_an_items_own_date_comes_before_the_jobs_date(self):
+        entry = self.add(apply_deadline=(date.today() + timedelta(days=5)).isoformat())
+        learning.add(self.cfg, entry["id"], "SQL", "2026-12-01")
+        self.assertIn("Learn by: 2026-12-01", self.page())
+
     def test_personal_learning_file_is_ignored_by_git(self):
         ignored = (Path(__file__).resolve().parent.parent / ".gitignore").read_text()
         self.assertIn("learning.csv", ignored.splitlines())
