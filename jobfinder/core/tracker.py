@@ -13,12 +13,12 @@ from typing import List, Optional
 from .. import storage
 from ..config import APPLIED_STATUSES, OUTREACH_STATUSES, TRACKER_SOURCES, TRACKER_STATUSES, file_path
 from ..errors import NotFoundError, ValidationError
-from . import runner
+from . import learning, runner
 
 COLUMNS = ["id", "company", "role", "apply_link", "posted_date", "source", "resume_version", "changes_made",
            "how_i_would_explain_it", "founder_x_handle", "company_email", "applied_date", "outreach_status",
-           "followup_date", "status", "notes"]
-_DATES = ("posted_date", "applied_date", "followup_date")
+           "followup_date", "status", "notes", "apply_deadline", "interview_date"]
+_DATES = ("posted_date", "applied_date", "followup_date", "apply_deadline", "interview_date")
 
 
 def read(cfg: dict) -> List[dict]:
@@ -37,8 +37,8 @@ def _shows_applied(entry: dict) -> bool:
 def rule_problem(entry: dict) -> str:
     """Why this entry breaks the explain-your-changes rule, or empty."""
     if _shows_applied(entry) and entry["changes_made"].strip() and not entry["how_i_would_explain_it"].strip():
-        return (f"{entry['company']} - {entry['role']} cannot be marked applied: changes_made is filled but "
-                "how_i_would_explain_it is empty. Write how you would explain the change in an interview first.")
+        return (f"{entry['company']} - {entry['role']} cannot be marked applied: you noted a resume change but not how "
+                "you would explain it. Write how you would explain the change in an interview first.")
     return ""
 
 
@@ -109,7 +109,8 @@ def add(cfg: dict, today: Optional[date] = None, **fields) -> dict:
 
 
 def add_from_run(cfg: dict, number: int, today: Optional[date] = None, **fields) -> dict:
-    """Add a match from the last run by its number."""
+    """Add a match from the last run by its number. Skills the posting names that your profile does not have go on
+    the job's list of things to learn."""
     last = runner.last_run(cfg)
     match = next((m for m in last.get("matches", []) if m["number"] == number), None)
     if match is None:
@@ -118,7 +119,10 @@ def add_from_run(cfg: dict, number: int, today: Optional[date] = None, **fields)
                   "posted_date": match["posted_date"], "source": "freshlist"}
     if match["track"] in cfg["resume_versions"]:
         from_match["resume_version"] = match["track"]
-    return add(cfg, today=today, **{**from_match, **fields})
+    entry = add(cfg, today=today, **{**from_match, **fields})
+    missing = match.get("details", {}).get("Missing skills", "")
+    learning.add_from_job(cfg, entry["id"], missing.split(","))
+    return entry
 
 
 def update(cfg: dict, entry_id: str, today: Optional[date] = None, **changes) -> dict:
@@ -141,6 +145,11 @@ def list_entries(cfg: dict, status: str = "") -> List[dict]:
     return [row for row in read(cfg) if not status or row["status"] == status]
 
 
+def logged_links(cfg: dict) -> set:
+    """Every apply link already in the tracker, in lower case."""
+    return {row["apply_link"].lower() for row in read(cfg) if row["apply_link"]}
+
+
 def problems(cfg: dict) -> List[dict]:
     """Entries breaking the rule because the file was edited by hand: {"id", "problem"}."""
     return [{"id": row["id"], "problem": rule_problem(row)} for row in read(cfg) if rule_problem(row)]
@@ -151,8 +160,12 @@ def due(cfg: dict, today: Optional[date] = None) -> List[dict]:
     today = today or date.today()
     found = []
     for row in read(cfg):
-        if row["status"] == "applied" and row["followup_date"] and date.fromisoformat(row["followup_date"]) <= today:
-            found.append({**row, "days_overdue": (today - date.fromisoformat(row["followup_date"])).days})
+        try:
+            followup = date.fromisoformat(row["followup_date"]) if row["followup_date"] else None
+        except ValueError:    # tracker.csv can be edited by hand; one mistyped date must not hide the rest
+            continue
+        if row["status"] == "applied" and followup and followup <= today:
+            found.append({**row, "days_overdue": (today - followup).days})
     return sorted(found, key=lambda row: row["followup_date"])
 
 

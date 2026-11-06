@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Add many companies · Freshlist{% endblock %}
+{% block head %}{% if check.status == 'running' %}<noscript><meta http-equiv="refresh" content="5"></noscript>{% endif %}{% endblock %}
+{% macro state_badge(state) %}
+  {% if state == 'good' %}<span class="badge badge-good">jobs in your places</span>
+  {% elif state == 'elsewhere' %}<span class="badge badge-plain">jobs elsewhere only</span>
+  {% elif state == 'no_jobs' %}<span class="badge badge-plain">no open jobs</span>
+  {% elif state == 'cannot_read' %}<span class="badge badge-warn">can't be read</span>
+  {% elif state == 'not_found' %}<span class="badge badge-warn">page not found</span>
+  {% elif state == 'failed' %}<span class="badge badge-warn">could not read</span>
+  {% elif state == 'listed' %}<span class="badge badge-plain">already on your list</span>
+  {% else %}<span class="badge badge-warn">not usable</span>{% endif %}
+{% endmacro %}
+{% block content %}
+<a class="back-link" href="{{ url_for('companies') }}">← Back to companies</a>
+<div class="page-head">
+  <h1>Add many companies</h1>
+  <p class="summary">Freshlist checks each company first. Nothing joins your list until you pick it.</p>
+</div>
+
+{% if check.status == 'running' %}
+<div class="panel" id="progress-box" data-status-url="{{ url_for('import_status') }}">
+  <p class="progress-text" id="progress-text" role="status">Starting…</p>
+  <div class="progress"><div class="progress-fill" id="progress-fill"></div></div>
+</div>
+<script src="{{ url_for('static', filename='progress.js') }}"></script>
+
+{% elif check.status == 'failed' %}
+<p class="notice notice-error" role="alert">{{ check.error }}</p>
+<form method="post" action="{{ url_for('clear_import') }}"><button type="submit">Start again</button></form>
+
+{% elif rows %}
+<ul class="count-list">
+  <li><strong>{{ counts.good }}</strong> with jobs in your places ({{ places }})</li>
+  <li><strong>{{ counts.elsewhere }}</strong> with jobs elsewhere only</li>
+  <li><strong>{{ counts.no_jobs }}</strong> with no open jobs</li>
+  <li><strong>{{ counts.cannot_read + counts.not_found + counts.failed + counts.bad }}</strong> with a problem</li>
+  {% if counts.listed %}<li><strong>{{ counts.listed }}</strong> already on your list</li>{% endif %}
+</ul>
+<form id="keep-form" method="post" action="{{ url_for('add_imported') }}">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th><span class="visually-hidden">Add</span></th><th>Company</th><th>Result</th><th>Jobs</th><th>In your places</th></tr></thead>
+      <tbody>
+        {% for index, row in rows %}
+        <tr>
+          <td class="keep-cell">
+            {% if row.careers_url and row.state not in ('listed', 'bad') %}
+            <input type="checkbox" name="keep" value="{{ index }}" aria-label="Add {{ row.company or row.careers_url }}"{% if row.keep %} checked{% endif %}>
+            {% endif %}
+          </td>
+          <td class="company">
+            {% set link = row.careers_url | safe_link %}
+            {% if link %}<a href="{{ link }}" target="_blank" rel="noopener noreferrer">{{ row.company or row.careers_url }}</a>{% else %}{{ row.company or row.careers_url or row.website }}{% endif %}
+            {% if row.note %}<span class="row-sub import-note">{{ row.note }}</span>{% endif %}
+          </td>
+          <td>{{ state_badge(row.state) }}</td>
+          <td class="number">{{ row.jobs if row.state in ('good', 'elsewhere', 'no_jobs') else '–' }}</td>
+          <td class="number">{{ row.in_your_cities if row.state in ('good', 'elsewhere', 'no_jobs') else '–' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</form>
+<div class="import-actions">
+  <button type="submit" form="keep-form" class="primary">Add ticked companies</button>
+  <form method="post" action="{{ url_for('clear_import') }}"><button type="submit">Start again</button></form>
+</div>
+<p class="check-note">This step only checks where each company is hiring. Once a company is on your list, Check for new jobs filters its jobs against your profile.</p>
+
+{% else %}
+<div class="import-grid">
+  <form class="panel" method="post" action="{{ url_for('start_import') }}" enctype="multipart/form-data">
+    <h2>Upload a CSV file</h2>
+    <p>It needs a column for the company name or the careers link. With names alone, Freshlist looks for a matching job page, which takes longer.</p>
+    <input type="file" name="file" accept=".csv,text/csv" required aria-label="CSV file">
+    <button type="submit" class="primary">Check this file</button>
+  </form>
+  <form class="panel" method="post" action="{{ url_for('start_import') }}">
+    <h2>Or paste links</h2>
+    <p>Paste any Greenhouse, Lever or Ashby links, in any order. Other text is ignored.</p>
+    <textarea name="links" rows="4" required aria-label="Links" placeholder="https://jobs.lever.co/example"></textarea>
+    <button type="submit" class="primary">Check these links</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

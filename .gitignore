@@ -6,6 +6,7 @@ settings.json
 companies.csv
 companies.csv.bak-*
 tracker.csv
+learning.csv
 seen_jobs.json
 last_run.json
 run_log.json

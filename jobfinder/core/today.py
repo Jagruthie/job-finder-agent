@@ -25,10 +25,16 @@ def _step(step_id: str, text: str, done: bool = False) -> dict:
 def outreach_pending(cfg: dict, day: date) -> list:
     """Applications from the last few days where outreach is not done."""
     since = day - timedelta(days=cfg["outreach_window_days"])
-    return [row for row in tracker.read(cfg)
-            if row["status"] in APPLIED_STATUSES and row["applied_date"]
-            and since <= date.fromisoformat(row["applied_date"]) <= day
-            and row["outreach_status"] in ("", "not_started")]
+    pending = []
+    for row in tracker.read(cfg):
+        try:
+            applied = date.fromisoformat(row["applied_date"]) if row["applied_date"] else None
+        except ValueError:    # tracker.csv can be edited by hand; one mistyped date must not hide the rest
+            continue
+        if row["status"] in APPLIED_STATUSES and applied and since <= applied <= day \
+                and row["outreach_status"] in ("", "not_started"):
+            pending.append(row)
+    return pending
 
 
 def checklist(cfg: dict, day: Optional[date] = None, override: str = "") -> dict:
@@ -43,8 +49,8 @@ def checklist(cfg: dict, day: Optional[date] = None, override: str = "") -> dict
     if label == "A":
         last = runner.last_run(cfg)
         ran_today = last.get("date") == day.isoformat()
-        links = {row["apply_link"] for row in tracker.read(cfg)}
-        matches = [{**{k: v for k, v in match.items() if k != "details"}, "in_tracker": match["apply_link"] in links}
+        links = tracker.logged_links(cfg)
+        matches = [{**{k: v for k, v in match.items() if k != "details"}, "in_tracker": match["apply_link"].lower() in links}
                    for match in (last.get("matches", []) if ran_today else [])]
         result.update(ran_today=ran_today, new_matches=matches, to_apply=tracker.list_entries(cfg, "to_apply"), steps=[
             _step("run", "Run Freshlist to check your watch-list.", ran_today),

@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- A local web page, opened with `python -m jobfinder ui`, with Today, New jobs, Tracker, Companies and Review screens. It runs only on your computer and uses the same core as the terminal.
+- Add many companies on the page from a CSV file or pasted links. Each one is checked first, and only the ones you tick join your list.
+- `python -m jobfinder shortcut` makes a desktop icon, so daily use needs no typing in a terminal.
+- On a Mac, `python -m jobfinder autostart on` keeps the page running in the background, so you can pin it as a Safari tab. `autostart off` removes it.
+- Tick-boxes on New jobs for the optional sources on that one check.
+- A Learn tab: things to learn for each job, with a month calendar of apply deadlines, interviews, follow-ups and learn-by dates. Adding a match to the tracker lists the skills its posting names that your profile does not have.
+- `apply_deadline` and `interview_date` columns in the tracker. Older tracker files keep working.
+
+### Changed
+
+- The message for the tracker's "applied" rule now says it in plain words.
+- A mistyped date in `tracker.csv` no longer stops `tracker due` or `today`. That entry is left out of those lists.
+
 ## 0.2.0 (unreleased)
 
 Freshlist now watches a fixed list of company career pages and shows only new matching jobs, with a tracker for applications and resume changes.

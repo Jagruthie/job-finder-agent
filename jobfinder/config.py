@@ -15,6 +15,7 @@ DEFAULT_SETTINGS = {
     "data_dir": ".",
     "companies_file": "companies.csv",
     "tracker_file": "tracker.csv",
+    "learning_file": "learning.csv",    # things to learn for each job in the tracker
     "seen_file": "seen_jobs.json",      # jobs already shown, and the dates needed to judge freshness
     "last_run_file": "last_run.json",   # the numbered matches from the last run
     "run_log_file": "run_log.json",     # the first live run and every match, for the review command

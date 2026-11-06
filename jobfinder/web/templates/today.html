@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Today · Freshlist{% endblock %}
+{% block content %}
+<div class="page-head head-row">
+  <div>
+    <h1>Day {{ plan.day }}: {{ 'Find and apply' if plan.day == 'A' else 'Reach out and widen' }}</h1>
+    <p class="summary">{{ plan.date }}{% if plan.chosen_by == 'override' %} · you chose this day (the date says Day {{ automatic_day }}){% endif %}</p>
+  </div>
+  <a class="day-switch" href="{{ url_for('today', day=other_day) }}">Show Day {{ other_day }} instead</a>
+</div>
+
+<div class="panel">
+  <ul class="checklist" id="checklist" data-date="{{ plan.date }}" data-day="{{ plan.day }}">
+    {% for step in plan.steps %}
+    <li>
+      <label>
+        <input type="checkbox" data-step="{{ step.id }}"{% if step.done %} checked disabled data-automatic="true"{% endif %}>
+        <span>{{ step.text }}</span>
+      </label>
+    </li>
+    {% endfor %}
+  </ul>
+  <p class="check-note">Your ticks are only a reminder, kept in this browser for today. This page never checks job sites or contacts anyone.</p>
+</div>
+<script>
+  (function () {
+    var list = document.getElementById("checklist");
+    var key = "freshlist-ticks-" + list.dataset.date + "-" + list.dataset.day;
+    var ticks = {};
+    try { ticks = JSON.parse(localStorage.getItem(key)) || {}; } catch (error) {}
+    list.querySelectorAll("input:not([data-automatic])").forEach(function (box) {
+      box.checked = !!ticks[box.dataset.step];
+      box.addEventListener("change", function () {
+        ticks[box.dataset.step] = box.checked;
+        try { localStorage.setItem(key, JSON.stringify(ticks)); } catch (error) {}
+      });
+    });
+  })();
+</script>
+
+{% if dates.missed or dates.soon %}
+<div class="panel due-panel">
+  <h2>Coming up</h2>
+  <ul class="due-list">
+    {% for event in dates.missed %}
+    <li><a href="{{ url_for('edit_entry', entry_id=event.entry_id) }}">{{ event.text }}</a><span class="due-when">Deadline passed {{ event.date }}</span></li>
+    {% endfor %}
+    {% for event in dates.soon %}
+    <li><a href="{{ url_for('learn') }}#job-{{ event.entry_id }}">{{ event.text }}</a><span class="due-when">{{ event.label }} {{ event.date }}</span></li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if plan.day == 'A' %}
+  {% if not plan.ran_today %}
+  <p><a class="button-link" href="{{ url_for('jobs') }}">Go to New jobs to check your companies</a></p>
+  {% endif %}
+
+  {% if plan.new_matches %}
+  <section class="today-section">
+    <h2 class="section-title">Today's matches ({{ plan.new_matches | length }})</h2>
+    <ul class="job-list">
+      {% for match in plan.new_matches %}
+      <li class="job">
+        <div class="job-main">
+          <p class="job-role">{{ match.role }} at {{ match.company }} <span class="badge badge-track">{{ match.track }}</span></p>
+          <p class="job-meta">{{ match.location or 'Location not stated' }} · posted {{ match.posted_date or 'date not stated' }}</p>
+        </div>
+        <div class="job-actions">
+          {% set link = match.apply_link | safe_link %}
+          {% if link %}<a class="link-button" href="{{ link }}" target="_blank" rel="noopener noreferrer">Open job page</a>{% endif %}
+          {% if match.in_tracker %}
+          <a class="badge-done" href="{{ url_for('tracker_list') }}">In tracker</a>
+          {% else %}
+          <form method="post" action="{{ url_for('track_match') }}">
+            <input type="hidden" name="job_id" value="{{ match.job_id }}">
+            <input type="hidden" name="back" value="today">
+            <button type="submit">Add to tracker</button>
+          </form>
+          {% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if plan.to_apply %}
+  <section class="today-section">
+    <h2 class="section-title">In your tracker, not applied yet ({{ plan.to_apply | length }})</h2>
+    <ul class="job-list">
+      {% for row in plan.to_apply %}
+      <li class="job">
+        <div class="job-main"><p class="job-role">{{ row.role }} at {{ row.company }}</p></div>
+        <div class="job-actions"><a class="link-button" href="{{ url_for('edit_entry', entry_id=row.id) }}">Edit</a></div>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+{% else %}
+  {% if plan.outreach_pending %}
+  <section class="today-section">
+    <h2 class="section-title">Waiting for outreach ({{ plan.outreach_pending | length }})</h2>
+    <ul class="job-list">
+      {% for row in plan.outreach_pending %}
+      <li class="job">
+        <div class="job-main">
+          <p class="job-role">{{ row.role }} at {{ row.company }}</p>
+          <p class="job-meta">Applied {{ row.applied_date }}{% if row.founder_x_handle %} · X: {{ row.founder_x_handle }}{% endif %}{% if row.company_email %} · {{ row.company_email }}{% endif %}{% if not row.founder_x_handle and not row.company_email %} · no contact saved{% endif %}</p>
+        </div>
+        <div class="job-actions"><a class="link-button" href="{{ url_for('edit_entry', entry_id=row.id) }}">Edit</a></div>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if plan.followups_due %}
+  <section class="today-section">
+    <h2 class="section-title">Follow-ups due ({{ plan.followups_due | length }})</h2>
+    <ul class="job-list">
+      {% for row in plan.followups_due %}
+      <li class="job">
+        <div class="job-main">
+          <p class="job-role">{{ row.role }} at {{ row.company }}</p>
+          <p class="job-meta">{% if row.days_overdue %}{{ row.days_overdue }} {{ 'day' if row.days_overdue == 1 else 'days' }} overdue{% else %}Due today{% endif %}</p>
+        </div>
+        <div class="job-actions"><a class="link-button" href="{{ url_for('edit_entry', entry_id=row.id) }}">Edit</a></div>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  <p class="today-section"><a href="{{ url_for('new_entry') }}">Add something you found on LinkedIn</a></p>
+{% endif %}
+{% endblock %}

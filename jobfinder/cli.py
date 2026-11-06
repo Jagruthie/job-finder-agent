@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import json
+import socket
+import urllib.request
+import webbrowser
 from pathlib import Path
 from typing import List
 
@@ -11,6 +15,8 @@ from .core.runner import prefetch  # noqa: F401
 from .errors import FreshlistError, ProfileError
 from .pipeline import clean_list
 from .setup import run_setup
+from . import autostart
+from .shortcut import create as create_shortcut
 from .sources import SourceError
 from .vocab import Vocab
 
@@ -186,8 +192,9 @@ def cmd_discover(args) -> int:
 def cmd_setup(args) -> int:
     cfg = load_config(args.settings, args.data_dir)
     run_setup(cfg["settings_path"], args.profiles_dir or str(Path(cfg["data_dir"]) / cfg["profiles_dir"]), Vocab.load())
-    print("\nNext: add companies with 'python -m jobfinder companies add <careers link>', then "
-          "'python -m jobfinder run'.")
+    print("\nNext, choose one way to open the page each day:\n"
+          "  On a Mac, keep it running and pin it in Safari: python -m jobfinder autostart on\n"
+          "  Or make a desktop icon to double-click: python -m jobfinder shortcut")
     return 0
 
 
@@ -300,7 +307,7 @@ def cmd_companies(args) -> int:
 
 _TRACKER_FIELDS = ["company", "role", "apply_link", "posted_date", "source", "resume_version", "changes_made",
                    "how_i_would_explain_it", "founder_x_handle", "company_email", "applied_date", "outreach_status",
-                   "followup_date", "status", "notes"]
+                   "followup_date", "status", "notes", "apply_deadline", "interview_date"]
 
 
 def _tracker_fields(args) -> dict:
@@ -380,6 +387,68 @@ def cmd_review(args) -> int:
             print(f"  - {failure['company']}: {failure['error']}")
     checkpoint = report["checkpoint"]
     print(f"\n{'WARNING: ' if checkpoint['warning'] else ''}Checkpoint: {checkpoint['message']}")
+    return 0
+
+
+def _port_is_busy(port: int) -> bool:
+    with socket.socket() as probe:
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _freshlist_is_running(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/jobs/status", timeout=2) as reply:
+            return "status" in json.load(reply)
+    except (OSError, ValueError):
+        return False
+
+
+def cmd_shortcut(args) -> int:
+    path = create_shortcut(args.to, args.data_dir, args.port)
+    print(f"Made {path}. From now on, double-click it to open Freshlist. You don't need to type anything.")
+    return 0
+
+
+def cmd_autostart(args) -> int:
+    if args.state == "off":
+        removed = autostart.turn_off()
+        print("Freshlist no longer starts in the background." if removed else "Freshlist was not set to start in the background.")
+        return 0
+    autostart.turn_on(args.data_dir, args.port)
+    print(f"Freshlist now runs in the background and starts again each time you log in.\n"
+          f"Open http://localhost:{args.port} in Safari, then right-click its tab and choose Pin Tab.\n"
+          f"If macOS asks whether Python may use your Desktop folder, choose Allow. "
+          f"Problems are written to {autostart.log_path()}.\n"
+          "To stop it: python -m jobfinder autostart off")
+    return 0
+
+
+def cmd_ui(args) -> int:
+    """Open the local web page. It listens only on this computer."""
+    try:
+        from werkzeug.serving import make_server
+        from .web import create_app
+    except ImportError:
+        print("The web page needs Flask. Install it with: pip install -r requirements.txt")
+        return 1
+    if _port_is_busy(args.port):     # checked first, because make_server ends the program when the port is taken
+        if _freshlist_is_running(args.port):
+            print(f"Freshlist is already open at http://127.0.0.1:{args.port}.")
+            if not args.no_open:
+                webbrowser.open(f"http://127.0.0.1:{args.port}")
+            return 0
+        print(f"Port {args.port} is already in use. Try another: python -m jobfinder ui --port {args.port + 1}")
+        return 1
+    server = make_server("127.0.0.1", args.port, create_app(args.data_dir, args.settings), threaded=True)
+    url = f"http://127.0.0.1:{args.port}"
+    print(f"Freshlist is open at {url} (only on this computer). Keep this window open while you use it; "
+          "close it or press Ctrl+C to stop.")
+    if not args.no_open:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopped.")
     return 0
 
 
@@ -497,6 +566,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_profile.add_argument("--name", required=True, help="short name for this profile, e.g. pm or seo")
     p_profile.add_argument("--out-dir", default="profiles")
     p_profile.set_defaults(func=cmd_profile)
+
+    p_ui = sub.add_parser("ui", help="open the local web page")
+    p_ui.add_argument("--port", type=int, default=8765)
+    p_ui.add_argument("--no-open", action="store_true", help="do not open the browser")
+    p_ui.add_argument("--settings")
+    p_ui.set_defaults(func=cmd_ui)
+
+    p_shortcut = sub.add_parser("shortcut", help="make an icon you double-click to open the web page")
+    p_shortcut.add_argument("--to", help="folder to put it in; default: your Desktop")
+    p_shortcut.add_argument("--port", type=int, default=8765)
+    p_shortcut.set_defaults(func=cmd_shortcut)
+
+    p_auto = sub.add_parser("autostart", help="macOS: keep the web page running in the background, for a pinned Safari tab")
+    p_auto.add_argument("state", choices=["on", "off"])
+    p_auto.add_argument("--port", type=int, default=8765)
+    p_auto.set_defaults(func=cmd_autostart)
     return parser
 
 

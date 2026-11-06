@@ -239,7 +239,7 @@ class TrackerTests(CoreCase):
         entry = tracker.add(self.cfg, today=TODAY, changes_made="Moved SQL to the top", **entry_fields())
         with self.assertRaises(ValidationError) as caught:
             tracker.update(self.cfg, entry["id"], today=TODAY, status="applied")
-        self.assertIn("how_i_would_explain_it", str(caught.exception))
+        self.assertIn("how you would explain", str(caught.exception))
         self.assertEqual(tracker.read(self.cfg)[0]["status"], "to_apply")     # nothing was saved
         with self.assertRaises(ValidationError):                              # a blank explanation is still empty
             tracker.update(self.cfg, entry["id"], today=TODAY, status="applied", how_i_would_explain_it="   ")

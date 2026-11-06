@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Freshlist{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='icon.svg') }}">
+  <link rel="mask-icon" href="{{ url_for('static', filename='icon.svg') }}" color="#2f6b4f">
+  <meta name="application-name" content="Freshlist">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="{{ url_for('home') }}">Freshlist</a>
+      <nav aria-label="Main">
+        <a href="{{ url_for('today') }}"{% if active == 'today' %} class="current" aria-current="page"{% endif %}>Today</a>
+        <a href="{{ url_for('jobs') }}"{% if active == 'jobs' %} class="current" aria-current="page"{% endif %}>New jobs</a>
+        <a href="{{ url_for('tracker_list') }}"{% if active == 'tracker' %} class="current" aria-current="page"{% endif %}>Tracker</a>
+        <a href="{{ url_for('learn') }}"{% if active == 'learn' %} class="current" aria-current="page"{% endif %}>Learn</a>
+        <a href="{{ url_for('companies') }}"{% if active == 'companies' %} class="current" aria-current="page"{% endif %}>Companies</a>
+        <a href="{{ url_for('review') }}"{% if active == 'review' %} class="current" aria-current="page"{% endif %}>Review</a>
+      </nav>
+    </div>
+  </header>
+  <main>
+    {% for category, message in get_flashed_messages(with_categories=true) %}
+      <p class="notice notice-{{ category }}" role="{{ 'alert' if category == 'error' else 'status' }}">{{ message }}</p>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer>Runs only on this computer. Freshlist never applies or sends anything for you.</footer>
+</body>
+</html>

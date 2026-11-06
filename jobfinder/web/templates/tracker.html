@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Tracker · Freshlist{% endblock %}
+{% block content %}
+<div class="page-head head-row">
+  <div>
+    <h1>Tracker</h1>
+    <p class="summary">
+      {% if total %}{{ total }} {{ 'entry' if total == 1 else 'entries' }} · {{ to_apply }} to apply · {{ applied }} applied{% else %}Every application, from any source, in one place.{% endif %}
+    </p>
+  </div>
+  <div class="actions-row">
+    {% if total %}
+    <form method="post" action="{{ url_for('export_tracker') }}">
+      <input type="hidden" name="status" value="{{ status }}">
+      <button type="submit">Export to Excel</button>
+    </form>
+    {% endif %}
+    <a class="button-link" href="{{ url_for('new_entry') }}">Add entry</a>
+  </div>
+</div>
+
+{% for problem in problems %}
+<p class="notice notice-warning" role="status">{{ problem.problem }} <a href="{{ url_for('edit_entry', entry_id=problem.id) }}">Fix it</a></p>
+{% endfor %}
+
+{% if due %}
+<div class="panel due-panel">
+  <h2>Follow-ups due ({{ due | length }})</h2>
+  <ul class="due-list">
+    {% for row in due %}
+    <li>
+      <a href="{{ url_for('edit_entry', entry_id=row.id) }}">{{ row.role }} at {{ row.company }}</a>
+      <span class="due-when">{% if row.days_overdue %}{{ row.days_overdue }} {{ 'day' if row.days_overdue == 1 else 'days' }} overdue{% else %}due today{% endif %}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if total %}
+<form class="filters" method="get" action="{{ url_for('tracker_list') }}">
+  <label>Status
+    <select name="status" onchange="this.form.requestSubmit()">
+      <option value="">All</option>
+      {% for choice in statuses %}<option value="{{ choice }}"{% if status == choice %} selected{% endif %}>{{ choice | show_value }}</option>{% endfor %}
+    </select>
+  </label>
+  <noscript><button type="submit">Filter</button></noscript>
+</form>
+
+{% if rows %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Role</th><th>Status</th><th>Applied</th><th>Follow up</th><th>Outreach</th></tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td class="role">
+          {% set link = row.apply_link | safe_link %}
+          {% if link %}<a class="company" href="{{ link }}" target="_blank" rel="noopener noreferrer">{{ row.role }}</a>{% else %}<span class="company">{{ row.role }}</span>{% endif %}
+          <span class="row-sub">{{ row.company }} · {{ row.source }}{% if row.resume_version %} · resume: {{ row.resume_version }}{% endif %}{% if row.apply_deadline and row.status == 'to_apply' %} · apply by {{ row.apply_deadline }}{% endif %}{% if row.interview_date %} · interview {{ row.interview_date }}{% endif %} · <a href="{{ url_for('edit_entry', entry_id=row.id) }}">Edit</a></span>
+        </td>
+        <td>
+          <form method="post" action="{{ url_for('change_entry_status', entry_id=row.id) }}">
+            <input type="hidden" name="filter_status" value="{{ status }}">
+            <select name="status" aria-label="Status for {{ row.role }} at {{ row.company }}" onchange="this.form.requestSubmit()">
+              {% for choice in statuses %}<option value="{{ choice }}"{% if row.status == choice %} selected{% endif %}>{{ choice | show_value }}</option>{% endfor %}
+            </select>
+            <noscript><button type="submit">Save</button></noscript>
+          </form>
+        </td>
+        <td class="date">{{ row.applied_date or '–' }}</td>
+        <td class="date">{{ row.followup_date or '–' }}</td>
+        <td>{{ row.outreach_status | show_value or '–' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="empty">No entries with this status. <a href="{{ url_for('tracker_list') }}">Show all</a></p>
+{% endif %}
+{% else %}
+<p class="empty">Nothing in your tracker yet. Add a job from <a href="{{ url_for('jobs') }}">New jobs</a>, or add one you found elsewhere.</p>
+{% endif %}
+{% endblock %}

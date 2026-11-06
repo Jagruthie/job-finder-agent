@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}New jobs · Freshlist{% endblock %}
+{% block head %}{% if run.status == 'running' %}<noscript><meta http-equiv="refresh" content="5"></noscript>{% endif %}{% endblock %}
+{% block content %}
+<div class="page-head head-row">
+  <div>
+    <h1>New jobs</h1>
+    <p class="summary">
+      {% if last_date %}Last checked {{ 'today' if is_today else last_date }}{% else %}No run yet. Check your companies to see matching jobs.{% endif %}
+    </p>
+  </div>
+  <form class="run-form" method="post" action="{{ url_for('start_run') }}">
+    <button type="submit" class="primary"{% if run.status == 'running' or not has_profiles %} disabled{% endif %}>{{ 'Checking…' if run.status == 'running' else 'Check for new jobs' }}</button>
+    <details class="more-sources">
+      <summary>Also check other sources</summary>
+      <label><input type="checkbox" name="starter"{% if cfg.use_starter_companies %} checked disabled{% endif %}> Built-in starter companies</label>
+      <label><input type="checkbox" name="remote_boards"{% if cfg.use_remote_boards %} checked disabled{% endif %}> Remote job boards (needs Remote in your places)</label>
+      <label><input type="checkbox" name="alert_emails"{% if cfg.use_alert_emails %} checked disabled{% endif %}> Job-alert emails you saved in {{ cfg.inbox_dir }}/</label>
+    </details>
+  </form>
+</div>
+
+{% if not has_profiles %}
+<p class="notice notice-warning">You need a profile before you can check for jobs. Run this in your terminal: <code>python -m jobfinder setup</code></p>
+{% endif %}
+
+{% if run.status == 'running' %}
+<div class="panel" id="progress-box" data-status-url="{{ url_for('run_status') }}">
+  <p class="progress-text" id="progress-text" role="status">Starting…</p>
+  <div class="progress"><div class="progress-fill" id="progress-fill"></div></div>
+</div>
+<script src="{{ url_for('static', filename='progress.js') }}"></script>
+{% elif run.status == 'failed' %}
+<p class="notice notice-error" role="alert">{{ run.error }}</p>
+{% elif result and not result.saved %}
+<p class="notice notice-error" role="alert">No company could be read, so nothing was remembered. Check your connection and try again.</p>
+{% endif %}
+
+{% if result %}
+<div class="panel run-result">
+  {% if result.saved %}
+  <p><strong>{{ result.new_matches | length }} new</strong> · {{ result.companies_read }} {{ 'company' if result.companies_read == 1 else 'companies' }} read{% if result.already_shown %} · {{ result.already_shown }} already shown before, left out{% endif %}</p>
+  {% else %}
+  <p><strong>0 companies read</strong></p>
+  {% endif %}
+  {% if result.failed %}
+  <div class="problem-list">
+    <h3>Could not be read this time</h3>
+    <ul>{% for item in result.failed %}<li>{{ item.company }}: {{ item.error }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+  {% if result.skipped %}
+  <div class="problem-list">
+    <h3>Skipped</h3>
+    <ul>{% for item in result.skipped %}<li>{{ item.company }}: {{ item.reason }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+  {% if result.warnings or result.notes %}
+  <div class="problem-list">
+    <h3>Notes</h3>
+    <ul>{% for note in result.warnings + result.notes %}<li>{{ note }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+  {% if left_out %}
+  <details>
+    <summary>Why {{ result.stats.get('jobs_seen', 0) }} jobs came down to this</summary>
+    <ul>{% for reason, count in left_out %}<li>{{ reason }}: {{ count }}</li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if matches %}
+<h2 class="section-title">{{ "Today's matches" if is_today else 'Matches from ' ~ last_date }} ({{ matches | length }})</h2>
+<ul class="job-list">
+  {% for match in matches %}
+  <li class="job">
+    <div class="job-main">
+      <p class="job-role">{{ match.role }} at {{ match.company }}
+        {% if match.is_new %}<span class="badge badge-new">new</span>{% endif %}
+        <span class="badge badge-track">{{ match.track }}</span>
+      </p>
+      <p class="job-meta">{{ match.location or 'Location not stated' }} · posted {{ match.posted_date or 'date not stated' }}{% if match.matched_by %} · {{ match.matched_by }}{% endif %}</p>
+    </div>
+    <div class="job-actions">
+      {% set link = match.apply_link | safe_link %}
+      {% if link %}<a class="link-button" href="{{ link }}" target="_blank" rel="noopener noreferrer">Open job page</a>{% endif %}
+      {% if match.in_tracker %}
+      <a class="badge-done" href="{{ url_for('tracker_list') }}">In tracker</a>
+      {% else %}
+      <form method="post" action="{{ url_for('track_match') }}">
+        <input type="hidden" name="job_id" value="{{ match.job_id }}">
+        <button type="submit">Add to tracker</button>
+      </form>
+      {% endif %}
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+{% elif last_date and run.status != 'running' %}
+<p class="empty">No new matches on the last run.</p>
+{% endif %}
+{% endblock %}
